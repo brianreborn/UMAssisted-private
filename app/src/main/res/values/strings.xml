@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UMAssisted</string>
+    <string name="service_description">Assists with Aoharu Hai / Unity Cup career (training sweep, no-choice advance, exit). Alpha scope only.</string>
+    <string name="sweep_toggle">Training Sweep</string>
+    <string name="voice_toggle">Voice Listen</string>
+    <string name="status_ready">Ready (in-career only)</string>
+    <string name="status_not_uma">Not in Umamusume</string>
+</resources>
