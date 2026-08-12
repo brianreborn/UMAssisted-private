@@ -1,4 +1,65 @@
+import java.io.File
+import java.util.Properties
+
+// Cribbed/adapted from japanglify/build.gradle.kts
 plugins {
-    id 'com.android.application' version '8.2.0' apply false
-    id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+    id 'com.android.application' version '8.7.3' apply false
+    id 'org.jetbrains.kotlin.android' version '2.0.21' apply false
+}
+
+/**
+ * FreeBSD build-host support.
+ * Brand Linux ELF tools (aapt2, adb, etc.) so the Linuxulator runs them.
+ */
+def realOsForBrand = System.getProperty('umassisted.real.os') ?: System.getProperty('os.name') ?: ''
+def isFreeBsdHost = realOsForBrand.equalsIgnoreCase('FreeBSD')
+
+def resolveSdkRoot(File rootDir) {
+    def env = System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')
+    if (env) return new File(env)
+
+    def localProps = new File(rootDir, 'local.properties')
+    if (localProps.isFile()) {
+        def props = new Properties()
+        localProps.withInputStream { props.load(it) }
+        def dir = props.getProperty('sdk.dir')?.replace('\\\\', '/')
+        if (dir) return new File(dir)
+    }
+    def bundled = new File(rootDir, 'sdk')
+    return bundled.directory ? bundled : null
+}
+
+tasks.register('brandLinuxElfs', Exec) {
+    group = 'build setup'
+    description = 'FreeBSD: brandelf -t Linux on Android SDK and Gradle-cached native tools'
+    onlyIf { isFreeBsdHost }
+
+    def script = rootProject.file('scripts/prepare-freebsd-build.sh')
+    commandLine 'bash', script.absolutePath
+    ignoreExitValue = false
+
+    doFirst {
+        if (!script.isFile()) {
+            throw new GradleException("Missing $script — run from project root")
+        }
+        script.setExecutable(true)
+    }
+}
+
+// Wire branding before any AGP task that executes native tools.
+gradle.projectsLoaded {
+    def app = rootProject.findProject(':app')
+    if (!app || !isFreeBsdHost) return
+
+    app.afterEvaluate {
+        tasks.matching { it.name == 'preBuild' }.configureEach {
+            dependsOn(rootProject.tasks.named('brandLinuxElfs'))
+        }
+        tasks.matching {
+            it.name in ['processDebugResources', 'processReleaseResources',
+                        'mergeDebugResources', 'mergeReleaseResources']
+        }.configureEach {
+            dependsOn(rootProject.tasks.named('brandLinuxElfs'))
+        }
+    }
 }

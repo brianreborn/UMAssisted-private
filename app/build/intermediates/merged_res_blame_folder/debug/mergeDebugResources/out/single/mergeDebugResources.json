@@ -1,0 +1,42 @@
+[
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-hdpi_ic_launcher.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-hdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-xhdpi_ic_launcher.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-xhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-xxhdpi_ic_launcher.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-xxhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-xxxhdpi_ic_launcher.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-xxxhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-mdpi_ic_launcher.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-mdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-xhdpi_ic_launcher_round.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-xhdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/layout_activity_main.xml.flat",
+        "source": "com.umassisted.app-main-28:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-hdpi_ic_launcher_round.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-hdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/xml_accessibility_service_config.xml.flat",
+        "source": "com.umassisted.app-main-28:/xml/accessibility_service_config.xml"
+    },
+    {
+        "merged": "com.umassisted.app-debug-26:/mipmap-mdpi_ic_launcher_round.png.flat",
+        "source": "com.umassisted.app-main-28:/mipmap-mdpi/ic_launcher_round.png"
+    }
+]

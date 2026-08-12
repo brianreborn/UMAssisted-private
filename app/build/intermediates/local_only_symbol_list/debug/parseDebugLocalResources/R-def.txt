@@ -1,0 +1,18 @@
+R_DEF: Internal format may change without notice
+local
+color accent
+color primary
+id statusText
+id sweepSwitch
+id voiceSwitch
+layout activity_main
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+string service_description
+string status_not_uma
+string status_ready
+string sweep_toggle
+string voice_toggle
+style Theme.UMAssisted
+xml accessibility_service_config

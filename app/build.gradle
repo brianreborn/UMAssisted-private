@@ -3,23 +3,39 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Cribbed/adapted from japanglify/app/build.gradle.kts
+// FreeBSD: ensure branding of Linux natives happens before AGP executes them.
+def realOs = System.getProperty('umassisted.real.os') ?: System.getProperty('os.name') ?: ''
+if (realOs.equalsIgnoreCase('FreeBSD')) {
+    tasks.configureEach { t ->
+        if (t.name == 'preBuild' || (t.name.startsWith('process') && t.name.endsWith('Resources'))) {
+            t.dependsOn(rootProject.tasks.named('brandLinuxElfs'))
+        }
+    }
+}
+
 android {
     namespace 'com.umassisted.app'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
-        applicationId "com.umassisted.app"
+        applicationId 'com.umassisted.app'
         minSdk 30
-        targetSdk 34
+        targetSdk 35
         versionCode 1
-        versionName "1.0-alpha"
+        versionName '1.0-alpha'
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
         }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -30,7 +46,7 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.mlkit:text-recognition:16.0.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
 }
