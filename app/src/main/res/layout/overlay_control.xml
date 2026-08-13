@@ -64,4 +64,19 @@
             android:scaleY="0.8" />
     </LinearLayout>
 
+    <!-- Read-only: screenshot + OCR of the current screen. Dispatches no
+         gestures, so it never injects input into the game (REQ-DEV1/2/3) and
+         can be used freely while in-career. Gives the user (and development)
+         a way to see what the app actually reads without acting on it. -->
+    <Button
+        android:id="@+id/overlayCaptureButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:minHeight="0dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:text="Read screen"
+        android:textSize="11sp" />
+
 </LinearLayout>

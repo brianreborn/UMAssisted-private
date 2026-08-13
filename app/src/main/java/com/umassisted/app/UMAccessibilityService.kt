@@ -15,6 +15,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Button
 import android.widget.Switch
 import android.widget.TextView
 import androidx.core.app.NotificationChannelCompat
@@ -80,6 +81,11 @@ class UMAccessibilityService : AccessibilityService() {
     private var overlaySweepSwitch: Switch? = null
     private var overlayVoiceSwitch: Switch? = null
 
+    // Result of the last overlay "Read screen" tap. Held in state rather than
+    // written straight to the TextView because refreshOverlay() runs on every
+    // accessibility event while in-game and would otherwise clobber it.
+    @Volatile private var lastReadSummary: String? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "Service connected")
@@ -105,6 +111,7 @@ class UMAccessibilityService : AccessibilityService() {
                 lastOcrText = ""
                 lastWasNoChoice = false
                 lastMatchReason = ""
+                lastReadSummary = null
                 hideOverlay()
             }
             return
@@ -811,6 +818,19 @@ class UMAccessibilityService : AccessibilityService() {
                 isChecked = voiceEnabled
                 setOnCheckedChangeListener { _, checked -> setVoiceEnabled(checked) }
             }
+            view.findViewById<Button>(R.id.overlayCaptureButton).setOnClickListener {
+                // Read-only: screenshot + OCR, no gesture dispatch (REQ-DEV1/2/3).
+                lastReadSummary = "reading…"
+                refreshOverlay()
+                captureAndAnalyzeScreen { text, noChoice ->
+                    lastReadSummary = when {
+                        text.isBlank() -> "read nothing"
+                        noChoice -> "no-choice"
+                        else -> "has-choice"
+                    }
+                    handler.post { refreshOverlay() }
+                }
+            }
 
             wm.addView(view, params)
             overlayView = view
@@ -846,7 +866,12 @@ class UMAccessibilityService : AccessibilityService() {
         val voiceSwitch = overlayVoiceSwitch ?: return
         if (sweepSwitch.isChecked != sweepEnabled) sweepSwitch.isChecked = sweepEnabled
         if (voiceSwitch.isChecked != voiceEnabled) voiceSwitch.isChecked = voiceEnabled
-        overlayStatusText?.text = if (isInUma) "UMAssisted — active" else "UMAssisted"
+        val read = lastReadSummary
+        overlayStatusText?.text = when {
+            read != null -> "UMAssisted — $read"
+            isInUma -> "UMAssisted — active"
+            else -> "UMAssisted"
+        }
     }
 
     // Gesture helper (will be expanded)
