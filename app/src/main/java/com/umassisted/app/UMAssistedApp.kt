@@ -9,6 +9,7 @@ import android.app.Application
 class UMAssistedApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        UserSettings.init(this)
         // Future: load local corpus here (REQ-M5)
     }
 }

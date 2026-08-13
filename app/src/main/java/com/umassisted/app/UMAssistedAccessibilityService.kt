@@ -111,6 +111,18 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastForegroundPackage: String? = null
 
+    // REQ-A22/REQ-V12: voice facility selection (arm on first utterance, confirm on
+    // the repeat). Pure decision logic lives in VoiceFacilitySelection; this service
+    // just supplies the gesture/timeout side effects.
+    private var voiceListener: VoiceListener? = null
+    private val voiceFacilitySelection = VoiceFacilitySelection { UserSettings.getVoiceConfirmWindowMs() }
+    private val voiceResumeRunnable = Runnable { resumeSweepAfterVoiceTimeout() }
+    // REQ-A23/A24: any recognized facility name or the dedicated "continue" phrase
+    // restarts the sweep — a continuation signal, not touch-screen input. Voice is the
+    // first channel; REQ-A24 defines this as modality-agnostic, so a future non-voice
+    // channel (haptic/switch) would feed the same field, not a parallel mechanism.
+    @Volatile private var lastVoiceHeartbeatAtMs: Long = 0L
+
     // Overlay kill switches (REQ-A7 / REQ-A10 / REQ-V9)
     private var overlayView: View? = null
     private var overlayHandle: TextView? = null
@@ -535,7 +547,110 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     fun setVoiceEnabled(enabled: Boolean) {
         voiceEnabled = enabled
         Log.i(TAG, "Voice listening ${if (enabled) "ENABLED" else "DISABLED"}")
+        if (enabled) {
+            val listener = voiceListener ?: VoiceListener(this, handler, ::onVoiceUtterances).also { voiceListener = it }
+            listener.start()
+        } else {
+            voiceListener?.stop()
+            handler.removeCallbacks(voiceResumeRunnable)
+            voiceFacilitySelection.clear()
+        }
         refreshOverlay()
+    }
+
+    /**
+     * Routes recognized speech alternates to facility-name matching (REQ-V8/V11
+     * default vocabulary) and REQ-V12's arm/confirm state machine (REQ-A22).
+     * Only meaningful while a sweep is armed and in Uma — matches outside that
+     * context are simply ignored, same as any other command with no live target.
+     */
+    private fun onVoiceUtterances(candidates: List<String>) {
+        Log.i(TAG, "Voice recognized candidates: $candidates")
+        if (!isInUma || !sweepEnabled) return
+
+        val facilityIndex = FacilityVocabulary.matchFacility(candidates)
+        if (facilityIndex != null || FacilityVocabulary.isHeartbeat(candidates)) {
+            lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+        }
+        if (facilityIndex == null) return
+
+        val now = System.currentTimeMillis()
+        when (val action = voiceFacilitySelection.onFacilityUtterance(facilityIndex, now)) {
+            is VoiceFacilitySelection.Action.Arm -> pauseSweepAt(action.facilityIndex)
+            is VoiceFacilitySelection.Action.ReArm -> pauseSweepAt(action.facilityIndex)
+            is VoiceFacilitySelection.Action.Confirm -> confirmFacilitySelection(action.facilityIndex)
+        }
+    }
+
+    /**
+     * REQ-A22/V12 "arm" step: interrupt whatever the sweep is doing (bumping the
+     * generation halts the in-flight chained gesture at its next segment check)
+     * and hold on the named facility — rewinding to it if the sweep had already
+     * moved past it. If not confirmed within the confirm window, the sweep
+     * resumes rather than sitting frozen (see resumeSweepAfterVoiceTimeout).
+     */
+    private fun pauseSweepAt(facilityIndex: Int) {
+        if (!isInUma || !sweepEnabled) return
+        val myGen = ++actionGeneration
+        val (win, positions) = facilityWindowPositions() ?: return
+        val (fx, fy) = positions[facilityIndex]
+        Log.i(TAG, "Voice: pausing sweep on ${FacilityVocabulary.facilityNames[facilityIndex]}")
+
+        val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
+        // A long, indefinite-feeling hold — ended early by confirm or by the
+        // resume timeout re-issuing a fresh sweep (both bump actionGeneration).
+        val holdMs = UserSettings.getVoiceConfirmWindowMs() + 2000L
+        val stroke = GestureDescription.StrokeDescription(path, 0L, holdMs)
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+
+        handler.removeCallbacks(voiceResumeRunnable)
+        handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
+    }
+
+    /**
+     * REQ-A22/V12 "confirm" step. REQ-A9 keeps the sweep itself preview-only
+     * (hover, never tap) — committing a facility is a distinct, deliberate tap,
+     * separate from the hover gesture that armed it (REQ-A2's hover-safety
+     * discipline: press and tap stay mechanically distinct).
+     */
+    private fun confirmFacilitySelection(facilityIndex: Int) {
+        if (!isInUma || !sweepEnabled) return
+        handler.removeCallbacks(voiceResumeRunnable)
+        val myGen = ++actionGeneration
+        val (win, positions) = facilityWindowPositions() ?: return
+        val (fx, fy) = positions[facilityIndex]
+        Log.i(TAG, "Voice: confirming ${FacilityVocabulary.facilityNames[facilityIndex]}")
+
+        val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    /** REQ-A22: an expired arm resumes sweeping rather than leaving the screen paused. */
+    private fun resumeSweepAfterVoiceTimeout() {
+        voiceFacilitySelection.clear()
+        if (isInUma && sweepEnabled) {
+            Log.i(TAG, "Voice: confirm window expired, resuming sweep")
+            performTrainingSweepOnce(captureFirst = false)
+        }
+    }
+
+    /**
+     * Facility row geometry, relative to the GAME WINDOW never the display
+     * (REQ-PL5). Fractions derived from the 1080x2400 fullscreen corpus.
+     * Shared by the sweep gesture and by voice pause/confirm so both agree on
+     * exactly where each facility is.
+     */
+    private fun facilityWindowPositions(): Pair<Rect, List<Pair<Int, Int>>>? {
+        val win = gameWindowBounds()
+        if (win == null || win.isEmpty) return null
+        fun wx(fx: Float) = (win.left + win.width() * fx).toInt()
+        fun wy(fy: Float) = (win.top + win.height() * fy).toInt()
+        val y = wy(0.82f)
+        val positions = listOf(
+            wx(0.12f) to y, wx(0.30f) to y, wx(0.50f) to y, wx(0.68f) to y, wx(0.86f) to y
+        )
+        return win to positions
     }
 
     /**
@@ -562,28 +677,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val myGen = ++actionGeneration
 
         val doSweep: () -> Unit = doSweep@{
-            // Geometry is relative to the GAME WINDOW, never the display (REQ-PL5).
-            // The facility row fractions below were derived from the 1080x2400
-            // fullscreen corpus, so they are expressed as fractions of the window and
-            // then mapped onto wherever that window actually is.
-            val win = gameWindowBounds()
-            if (win == null || win.isEmpty) {
+            val (win, positions) = facilityWindowPositions() ?: run {
                 Log.w(TAG, "Sweep aborted: game window bounds unavailable")
                 return@doSweep
             }
             Log.i(TAG, "Sweep geometry from game window $win")
-
-            fun wx(fx: Float) = (win.left + win.width() * fx).toInt()
-            fun wy(fy: Float) = (win.top + win.height() * fy).toInt()
-
-            val y = wy(0.82f)
-            val positions = listOf(
-                wx(0.12f) to y,   // Speed
-                wx(0.30f) to y,   // Stamina
-                wx(0.50f) to y,   // Power
-                wx(0.68f) to y,   // Guts
-                wx(0.86f) to y    // Wit
-            )
 
             handler.post {
                 if (!sweepCanContinue(myGen)) {
@@ -593,14 +691,24 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
                 val labels = arrayOf("Speed", "Stamina", "Power", "Guts", "Wit")
 
-                val (x0, y0) = positions[0]
-                val (xLast, yLast) = positions.last()
+                // REQ-A22 extension: start facility + direction are user-configurable —
+                // no reason a pass must always start at Speed heading right. The rest
+                // are visited in a cyclic scan from the start index, wrapping across the
+                // row so every facility is still covered exactly once per direction.
+                val startIndex = UserSettings.getSweepStartFacilityIndex()
+                val dirStep = if (UserSettings.getSweepStartDirectionRight()) 1 else -1
+                val visitOrder = (0 until positions.size).map { (startIndex + it * dirStep).mod(positions.size) }
+                val orderedPositions = visitOrder.map { positions[it] }
+                Log.i(TAG, "Sweep visit order: ${visitOrder.map { labels[it] }}")
+
+                val (x0, y0) = orderedPositions[0]
+                val (xLast, yLast) = orderedPositions.last()
                 // Slide clear of the row before lifting so press and release land on different
                 // areas outside any facility button bounds, preventing accidental clicks (REQ-SF1).
                 val releaseY = (yLast - (win.height() * 0.12f).toInt()).coerceAtLeast(win.top + 10)
 
                 // Every point is bounds-checked before anything is dispatched (REQ-SF7).
-                val allPoints = positions.map { (px, py) -> px.toFloat() to py.toFloat() } +
+                val allPoints = orderedPositions.map { (px, py) -> px.toFloat() to py.toFloat() } +
                     listOf(xLast.toFloat() to releaseY.toFloat())
                 val bounds = gameWindowBounds()
                 if (bounds == null || allPoints.any { !bounds.contains(it.first.toInt(), it.second.toInt()) }) {
@@ -608,42 +716,151 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     return@post
                 }
 
-                val sweepPath = Path().apply {
-                    moveTo(x0.toFloat(), y0.toFloat())
-                    for (i in 1 until positions.size) {
-                        val (px, py) = positions[i]
-                        lineTo(px.toFloat(), py.toFloat())
+                data class Segment(val x: Float, val y: Float, val durationMs: Long)
+
+                // REQ-A22: the sweep period paces visual comfort, not a comprehension
+                // deadline (selection resolves by facility identity, never by what the
+                // sweep happens to be highlighting) — so speed is free to vary rather
+                // than moving at one uniform rate. Steps are spaced EVENLY ON SCREEN;
+                // for SINUSOIDAL/DECELERATING_PASSES it's the per-step *duration* that
+                // varies, driven by a speed profile v(u) = sin(pi*u) over each gap's
+                // spatial fraction u in (0,1) — slow near a facility (lingering), fastest
+                // in the open space between. Gap time is allocated proportional to that
+                // gap's screen distance so speed stays consistent across uneven gaps
+                // (the wrap-around wraps across a wider span than the others).
+                val mode = UserSettings.getSweepPacingMode()
+                val subStepsPerGap = 24
+
+                fun buildPassSegments(waypoints: List<Pair<Int, Int>>, periodMs: Long): List<Segment> {
+                    val gaps = waypoints.size - 1
+                    val gapDistances = (0 until gaps).map { g ->
+                        val (fx, fy) = waypoints[g]
+                        val (tx, ty) = waypoints[g + 1]
+                        kotlin.math.hypot((tx - fx).toDouble(), (ty - fy).toDouble())
                     }
-                    // Slide clear above the facility row before lifting
-                    lineTo(xLast.toFloat(), releaseY.toFloat())
+                    val totalDistance = gapDistances.sum().coerceAtLeast(1.0)
+
+                    val segs = mutableListOf<Segment>()
+                    for (g in 0 until gaps) {
+                        val (fx, fy) = waypoints[g]
+                        val (tx, ty) = waypoints[g + 1]
+                        val gapDurationMs = periodMs * (gapDistances[g] / totalDistance)
+
+                        if (mode == UserSettings.SweepPacingMode.LINEAR) {
+                            segs += Segment(tx.toFloat(), ty.toFloat(), gapDurationMs.toLong().coerceAtLeast(1L))
+                            continue
+                        }
+
+                        // Time each equal-width spatial bin spends is inversely proportional
+                        // to speed at its midpoint: slow bins (near u=0/1) get more time.
+                        val weights = (1..subStepsPerGap).map { k ->
+                            val uMid = (k - 0.5f) / subStepsPerGap
+                            1f / kotlin.math.sin(Math.PI.toFloat() * uMid)
+                        }
+                        val weightSum = weights.sum()
+                        for (s in 1..subStepsPerGap) {
+                            val u = s.toFloat() / subStepsPerGap  // equal spatial step
+                            val px = fx + (tx - fx) * u
+                            val py = fy + (ty - fy) * u
+                            val stepDurationMs = (gapDurationMs * weights[s - 1] / weightSum).toLong().coerceAtLeast(1L)
+                            segs += Segment(px, py, stepDurationMs)
+                        }
+                    }
+                    return segs
                 }
 
-                val sweepDurationMs = 2200L
-                Log.i(TAG, "Dispatching continuous sweep drag: (${x0}, ${y0}) -> (${xLast}, ${yLast}) -> (${xLast}, ${releaseY}), duration=${sweepDurationMs}ms")
+                val basePeriodMs = UserSettings.getSweepPeriodMs()
+                val passCount = if (mode == UserSettings.SweepPacingMode.DECELERATING_PASSES) {
+                    UserSettings.getSweepPassCount()
+                } else 1
+                val slowdown = UserSettings.getSweepPassSlowdownFactor()
 
-                val stroke = GestureDescription.StrokeDescription(sweepPath, 0L, sweepDurationMs)
+                // DECELERATING_PASSES chains every pass into ONE continuous, never-
+                // lifting touch — a real swipe doesn't teleport or restart between
+                // passes — bouncing back and forth across the row while each successive
+                // pass's period grows by `slowdown`. That reads as one motion
+                // continuously losing energy, like a rolling wheel slowing down, rather
+                // than a series of discrete stop-and-restart passes. Only the very last
+                // segment of the very last pass lifts the finger.
+                val allSegments = mutableListOf<Segment>()
+                var passWaypoints = orderedPositions
+                var lastPoint = passWaypoints.last()
+                for (p in 0 until passCount) {
+                    val periodMs = (basePeriodMs * Math.pow(slowdown.toDouble(), p.toDouble())).toLong()
+                    allSegments += buildPassSegments(passWaypoints, periodMs)
+                    lastPoint = passWaypoints.last()
+                    passWaypoints = passWaypoints.reversed()
+                }
+                // Slide clear above the facility row before lifting — a quick, uniform
+                // release motion, not part of the eased "reading" pacing above.
+                allSegments += Segment(lastPoint.first.toFloat(), releaseY.toFloat(), SWEEP_RELEASE_MS)
 
-                val ok = dispatchGesture(
-                    GestureDescription.Builder().addStroke(stroke).build(),
-                    object : GestureResultCallback() {
-                        override fun onCompleted(gestureDescription: GestureDescription) {
-                            Log.i(TAG, "Continuous sweep drag COMPLETED — finger released clear of facility buttons")
-                            if (sweepCanContinue(myGen)) {
-                                handler.postDelayed({
-                                    if (sweepCanContinue(myGen)) captureAndAnalyzeScreen { _, _ -> }
-                                }, 350)
+                Log.i(TAG, "Dispatching $mode sweep drag: ${orderedPositions.size} facilities, " +
+                    "$passCount pass(es), ${allSegments.size} segments, base period=${basePeriodMs}ms")
+
+                fun dispatchSegment(index: Int, prevStroke: GestureDescription.StrokeDescription?) {
+                    if (!sweepCanContinue(myGen)) {
+                        Log.i(TAG, "Sweep aborted mid-sequence (kill switch, left game, or superseded)")
+                        return
+                    }
+                    val seg = allSegments[index]
+                    val willContinue = index < allSegments.size - 1
+                    val segPath = Path()
+                    val stroke = if (prevStroke == null) {
+                        segPath.moveTo(x0.toFloat(), y0.toFloat())
+                        segPath.lineTo(seg.x, seg.y)
+                        GestureDescription.StrokeDescription(segPath, 0L, seg.durationMs, willContinue)
+                    } else {
+                        segPath.moveTo(
+                            if (index == 0) x0.toFloat() else allSegments[index - 1].x,
+                            if (index == 0) y0.toFloat() else allSegments[index - 1].y
+                        )
+                        segPath.lineTo(seg.x, seg.y)
+                        prevStroke.continueStroke(segPath, 0L, seg.durationMs, willContinue)
+                    }
+
+                    val ok = dispatchGesture(
+                        GestureDescription.Builder().addStroke(stroke).build(),
+                        object : GestureResultCallback() {
+                            override fun onCompleted(gestureDescription: GestureDescription) {
+                                if (willContinue) {
+                                    dispatchSegment(index + 1, stroke)
+                                } else {
+                                    Log.i(TAG, "Sweep drag COMPLETED — finger released clear of facility buttons")
+                                    if (sweepCanContinue(myGen)) {
+                                        handler.postDelayed({
+                                            if (sweepCanContinue(myGen)) captureAndAnalyzeScreen { _, _ -> }
+                                        }, 350)
+                                    }
+                                    // REQ-A23: the sweep restarts for another pass only when a fresh
+                                    // continuation signal (voice, not touch-screen input) has arrived within
+                                    // the window — silence stops it, so this stays a chain of explicit
+                                    // signals, not a plain self-loop (REQ-A5).
+                                    if (sweepCanContinue(myGen) && UserSettings.getSweepRestartOnSignalEnabled()) {
+                                        val sinceSignal = System.currentTimeMillis() - lastVoiceHeartbeatAtMs
+                                        if (sinceSignal <= UserSettings.getSweepHeartbeatWindowMs()) {
+                                            handler.postDelayed({
+                                                if (sweepCanContinue(myGen)) performTrainingSweepOnce(captureFirst = false)
+                                            }, 350)
+                                        } else {
+                                            Log.i(TAG, "Sweep restart-on-signal: no continuation signal within window, stopping")
+                                        }
+                                    }
+                                }
                             }
-                        }
 
-                        override fun onCancelled(gestureDescription: GestureDescription) {
-                            Log.w(TAG, "Continuous sweep drag CANCELLED by OS")
-                        }
-                    },
-                    null
-                )
-                if (!ok) {
-                    Log.w(TAG, "Continuous sweep drag failed to dispatch")
+                            override fun onCancelled(gestureDescription: GestureDescription) {
+                                Log.w(TAG, "Sweep drag CANCELLED by OS at segment $index")
+                            }
+                        },
+                        null
+                    )
+                    if (!ok) {
+                        Log.w(TAG, "Sweep drag failed to dispatch at segment $index")
+                    }
                 }
+
+                dispatchSegment(0, null)
             }
             Unit
         }

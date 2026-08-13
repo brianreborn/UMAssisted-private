@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
+    android:layout_height="match_parent">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="24dp"
     android:gravity="center_horizontal">
@@ -44,6 +48,184 @@
         android:text="@string/voice_toggle"
         android:textSize="18sp"
         android:layout_marginBottom="20dp" />
+
+    <!-- Sweep pacing settings (REQ-A22): visual-comfort pacing, no comprehension
+         deadline — every knob here is a preference, not a safety floor. -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Sweep behavior"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/sweepPeriodLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Sweep period: 8000 ms"
+        android:textSize="14sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="4dp">
+
+        <EditText
+            android:id="@+id/sweepPeriodEditText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:inputType="number"
+            android:hint="ms"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/sweepPeriodSetButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Set" />
+    </LinearLayout>
+
+    <SeekBar
+        android:id="@+id/sweepPeriodSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="11"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pacing shape"
+        android:textSize="12sp"
+        android:textColor="#888888" />
+
+    <Spinner
+        android:id="@+id/sweepPacingModeSpinner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginEnd="8dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start facility"
+                android:textSize="12sp"
+                android:textColor="#888888" />
+
+            <Spinner
+                android:id="@+id/sweepStartFacilitySpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start direction"
+                android:textSize="12sp"
+                android:textColor="#888888" />
+
+            <ToggleButton
+                android:id="@+id/sweepDirectionToggle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textOn="Rightward →"
+                android:textOff="← Leftward"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Only meaningful in DECELERATING_PASSES mode; MainActivity toggles visibility. -->
+    <LinearLayout
+        android:id="@+id/sweepPassesGroup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/sweepPassCountLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Passes: 3"
+            android:textSize="14sp" />
+
+        <SeekBar
+            android:id="@+id/sweepPassCountSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="5"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/sweepPassSlowdownLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Slowdown per pass: 1.5x"
+            android:textSize="14sp" />
+
+        <SeekBar
+            android:id="@+id/sweepPassSlowdownSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="20"
+            android:layout_marginBottom="8dp" />
+    </LinearLayout>
+
+    <!-- REQ-A23: duration is a separate axis from period. Off by default; only takes
+         effect if voice is also listening, since restarting requires a signal. -->
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/sweepRestartOnSignalSwitch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Restart sweep on non-touch-screen input (voice)"
+        android:textSize="13sp"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:id="@+id/sweepHeartbeatWindowLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Signal window: 6000 ms"
+        android:textSize="12sp"
+        android:textColor="#888888" />
+
+    <SeekBar
+        android:id="@+id/sweepHeartbeatWindowSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="13000"
+        android:layout_marginBottom="16dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#333333"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="16dp" />
 
     <Button
         android:id="@+id/captureButton"
@@ -141,3 +323,4 @@
         android:layout_marginTop="8dp" />
 
 </LinearLayout>
+</ScrollView>

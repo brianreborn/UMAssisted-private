@@ -2,7 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- No INTERNET permission (REQ-S1) -->
-    <!-- No other dangerous permissions for alpha -->
 
     <!-- Required for the AccessibilityService's startForeground() call (REQ-A7 always-on
          kill-switch notification). Without these two, onServiceConnected() throws
@@ -10,6 +9,9 @@
          permanently refusing to rebind it until manually toggled off/on in Settings. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- On-device speech recognition only (REQ-V2/REQ-S1 — no network/cloud STT). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".UMAssistedApp"
