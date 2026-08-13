@@ -82,6 +82,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         private const val GLYPH_SWEEP = "🧹"     // sweep + list auto-scroll
         private const val GLYPH_VOICE = "🎤"     // voice listening
         private const val GLYPH_READ = "👁"      // read screen (OCR only, no input)
+        private const val GLYPH_RUN = "▶"       // run ONE sweep pass (dispatches input)
+        private const val GLYPH_RUN_BLOCKED = "🚫"  // run unavailable: sweep not armed
         private const val GLYPH_READ_NOCHOICE = "✅"  // last read: safe to advance
         private const val GLYPH_READ_CHOICE = "❓"    // last read: has a real choice
         private const val GLYPH_READ_EMPTY = "❌"     // last read: nothing recognised
@@ -112,6 +114,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private var overlaySweepCell: TextView? = null
     private var overlayVoiceCell: TextView? = null
     private var overlayReadCell: TextView? = null
+    private var overlayRunCell: TextView? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var overlayExpanded = false
     private var lastOsButtonBounds: Rect? = null
@@ -179,14 +182,21 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             }
             return
         }
-        val wasInUma = isInUma
         isInUma = true
         lastForegroundPackage = activePkg
 
         // Always-visible kill switches (REQ-A7/A10/V9): show as soon as Uma becomes
         // foreground, not gated behind opening MainActivity — MainActivity is a
         // separate backgrounded app the whole time Uma is on screen.
-        if (!wasInUma) showOverlay() else refreshOverlay()
+        //
+        // Keyed off whether the overlay actually exists, not off an inferred
+        // wasInUma->isInUma transition. isInUma lives in the companion object, so it
+        // is static and outlives the service instance: after the OS accessibility
+        // button disabled and re-enabled us, the fresh instance started with
+        // overlayView == null but a stale isInUma == true, took the refresh branch,
+        // and refreshOverlay() returned immediately on the null view — so toggling
+        // the service back on never brought the overlay back.
+        if (overlayView == null) showOverlay() else refreshOverlay()
     }
 
     override fun onInterrupt() {
@@ -201,6 +211,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         handler.removeCallbacksAndMessages(null)
         actionGeneration++
         hideOverlay()
+        resetTransientState()
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -211,6 +222,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         handler.removeCallbacksAndMessages(null)
         actionGeneration++
         hideOverlay()
+        resetTransientState()
         if (instance === this) instance = null
     }
 
@@ -308,10 +320,86 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val rect = Rect()
         node.getBoundsInScreen(rect)
 
-        val path = Path().apply { moveTo(rect.centerX().toFloat(), rect.centerY().toFloat()) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 160)
-        val ok = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        val cx = rect.centerX().toFloat()
+        val cy = rect.centerY().toFloat()
+        val ok = dispatchGuarded(
+            gen = actionGeneration,
+            points = listOf(cx to cy),
+            what = "decision replay tap",
+            build = {
+                val path = Path().apply { moveTo(cx, cy) }
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, 160))
+                    .build()
+            }
+        )
         Log.i(TAG, "Replay tap dispatched=$ok for previous choice")
+        return ok
+    }
+
+    // ============================================================
+    // Geometry + guarded dispatch (REQ-SF7, REQ-PL5)
+    // ============================================================
+
+    /**
+     * The game's own window bounds. All gesture geometry must be derived from this,
+     * never from display metrics: the game does not necessarily own the whole screen
+     * (split-screen, freeform, insets, letterboxing). On this device the game window
+     * was reported as Rect(86,303-993,2208) on a 1080x2400 display while the alpha's
+     * sweep maths assumed a full 1080x2400 — i.e. every hover was already landing in
+     * the wrong place whenever the window was inset. See REQ-PL5.
+     */
+    private fun gameWindowBounds(): Rect? {
+        return try {
+            windows.asSequence()
+                .filter { it.root?.packageName == TARGET_PACKAGE }
+                .map { w -> Rect().also { w.getBoundsInScreen(it) } }
+                .filter { !it.isEmpty }
+                .maxByOrNull { it.width().toLong() * it.height().toLong() }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not read game window bounds", t)
+            null
+        }
+    }
+
+    /**
+     * Dispatch a gesture only if it is still safe to do so, re-checked at this instant
+     * rather than when the command started (REQ-SF7).
+     *
+     * Verifies: the target app is genuinely foreground, the command has not been
+     * superseded, and every point of the gesture lies inside the game's own window —
+     * a foreground app does not necessarily own every pixel, so "foreground" alone is
+     * not enough to promise the tap cannot land somewhere else.
+     */
+    private fun dispatchGuarded(
+        gen: Int,
+        points: List<Pair<Float, Float>>,
+        build: () -> GestureDescription,
+        callback: GestureResultCallback? = null,
+        what: String = "gesture"
+    ): Boolean {
+        if (!canContinue(gen)) {
+            Log.i(TAG, "Blocked $what: superseded or no longer in target app")
+            return false
+        }
+        val activePkg = rootInActiveWindow?.packageName?.toString()
+        if (activePkg != TARGET_PACKAGE) {
+            Log.w(TAG, "Blocked $what: foreground is $activePkg, not $TARGET_PACKAGE")
+            return false
+        }
+        val bounds = gameWindowBounds()
+        if (bounds == null) {
+            Log.w(TAG, "Blocked $what: game window bounds unavailable")
+            return false
+        }
+        for ((x, y) in points) {
+            if (!bounds.contains(x.toInt(), y.toInt())) {
+                Log.w(TAG, "Blocked $what: point ($x,$y) outside game window $bounds")
+                return false
+            }
+        }
+        val ok = dispatchGesture(build(), callback, null)
+        if (!ok) Log.w(TAG, "dispatchGesture returned false for $what")
         return ok
     }
 
@@ -478,19 +566,28 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // remaining queued step below, instead of letting two sequences interleave.
         val myGen = ++actionGeneration
 
-        val doSweep: () -> Unit = {
-            // Pragmatic alpha geometry for 1080x2400 (common in the corpus).
-            // Real implementation will compute rects from vision + labeled corpus.
-            val screenW = 1080
-            val screenH = 2400
+        val doSweep: () -> Unit = doSweep@{
+            // Geometry is relative to the GAME WINDOW, never the display (REQ-PL5).
+            // The facility row fractions below were derived from the 1080x2400
+            // fullscreen corpus, so they are expressed as fractions of the window and
+            // then mapped onto wherever that window actually is.
+            val win = gameWindowBounds()
+            if (win == null || win.isEmpty) {
+                Log.w(TAG, "Sweep aborted: game window bounds unavailable")
+                return@doSweep
+            }
+            Log.i(TAG, "Sweep geometry from game window $win")
 
-            val y = (screenH * 0.82f).toInt()
+            fun wx(fx: Float) = (win.left + win.width() * fx).toInt()
+            fun wy(fy: Float) = (win.top + win.height() * fy).toInt()
+
+            val y = wy(0.82f)
             val positions = listOf(
-                (screenW * 0.12f).toInt() to y,   // Speed
-                (screenW * 0.30f).toInt() to y,   // Stamina
-                (screenW * 0.50f).toInt() to y,   // Power
-                (screenW * 0.68f).toInt() to y,   // Guts
-                (screenW * 0.86f).toInt() to y    // Wit
+                wx(0.12f) to y,   // Speed
+                wx(0.30f) to y,   // Stamina
+                wx(0.50f) to y,   // Power
+                wx(0.68f) to y,   // Guts
+                wx(0.86f) to y    // Wit
             )
 
             handler.post {
@@ -531,15 +628,20 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     val rect = Rect(x - 70, yy - 45, x + 70, yy + 45)
                     Log.i(TAG, "Sweep hover ${index + 1}/5")
 
-                    val path = Path().apply {
-                        moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
-                    }
-                    val stroke = GestureDescription.StrokeDescription(path, 0, SWEEP_DWELL_MS)
-                    val gesture = GestureDescription.Builder()
-                        .addStroke(stroke)
-                        .build()
+                    val cx = rect.centerX().toFloat()
+                    val cy = rect.centerY().toFloat()
 
-                    val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+                    val dispatched = dispatchGuarded(
+                        gen = myGen,
+                        points = listOf(cx to cy),
+                        what = "sweep hover ${index + 1}/5",
+                        build = {
+                            val path = Path().apply { moveTo(cx, cy) }
+                            GestureDescription.Builder()
+                                .addStroke(GestureDescription.StrokeDescription(path, 0, SWEEP_DWELL_MS))
+                                .build()
+                        },
+                        callback = object : GestureResultCallback() {
                         override fun onCompleted(gestureDescription: GestureDescription) {
                             val fac = arrayOf("Speed", "Stamina", "Power", "Guts", "Wit")[index]
                             Log.i(TAG, "Sweep hover completed on $fac position")
@@ -568,7 +670,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         override fun onCancelled(gestureDescription: GestureDescription) {
                             Log.w(TAG, "Gesture cancelled during sweep")
                         }
-                    }, null)
+                        }
+                    )
 
                     if (!dispatched) {
                         Log.w(TAG, "Failed to dispatch hover gesture")
@@ -614,7 +717,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
         // Explicit advance supersedes any in-flight sweep/exit chain (service-health:
         // anti-overlap). See actionGeneration doc on the companion object.
-        actionGeneration++
+        val myGen = ++actionGeneration
 
         // REQ-A4: prefer any previously recorded user decision for this screen.
         val sig = signatureFor(lastOcrText)
@@ -662,15 +765,16 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
         if (candidates.isEmpty()) {
             Log.i(TAG, "No obvious advance button found via nodes. Falling back to center tap (risky).")
-            // Very conservative fallback: tap roughly where "Close" or "Next" often is (bottom center).
-            // In real code we would not do blind taps.
-            val screenW = 1080
-            val screenH = 2400
-            val path = Path().apply {
-                moveTo(screenW * 0.5f, screenH * 0.88f)
+            // Very conservative fallback: tap roughly where "Close" or "Next" often is
+            // (bottom centre of the GAME WINDOW, not the display — REQ-PL5).
+            val win = gameWindowBounds()
+            if (win == null || win.isEmpty) {
+                Log.w(TAG, "Advance fallback aborted: game window bounds unavailable")
+                return
             }
-            val stroke = GestureDescription.StrokeDescription(path, 0, 120)
-            dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+            val fx = win.left + win.width() * 0.5f
+            val fy = win.top + win.height() * 0.88f
+            tap(fx, fy, 120, myGen, "advance fallback (blind)")
             return
         }
 
@@ -688,23 +792,24 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "Tapping advance candidate at ${rect.centerX()},${rect.centerY()}")
 
-        val path = Path().apply {
-            moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
-        }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 180)
-        val ok = dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke).build(),
-            object : GestureResultCallback() {
+        val cx = rect.centerX().toFloat()
+        val cy = rect.centerY().toFloat()
+        dispatchGuarded(
+            gen = myGen,
+            points = listOf(cx to cy),
+            what = "no-choice advance",
+            build = {
+                val path = Path().apply { moveTo(cx, cy) }
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, 180))
+                    .build()
+            },
+            callback = object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription) {
                     Log.i(TAG, "No-choice advance tap completed")
                 }
-            },
-            null
+            }
         )
-
-        if (!ok) {
-            Log.w(TAG, "Failed to dispatch advance gesture")
-        }
     }
 
     /**
@@ -719,21 +824,34 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         }
         Log.i(TAG, "List scroll (explicit) directionDown=$directionDown")
 
-        val screenW = 1080
-        val screenH = 2400
-        val startX = (screenW * 0.55f)
-        val startY = if (directionDown) (screenH * 0.62f) else (screenH * 0.38f)
-        val endY   = if (directionDown) (screenH * 0.32f) else (screenH * 0.68f)
+        val myGen = ++actionGeneration
 
         handler.post {
             if (!sweepEnabled || !isInUma) return@post
-            val path = Path().apply {
-                moveTo(startX, startY)
-                lineTo(startX, endY)
+            // Window-relative, not display-relative (REQ-PL5).
+            val win = gameWindowBounds()
+            if (win == null || win.isEmpty) {
+                Log.w(TAG, "List scroll aborted: game window bounds unavailable")
+                return@post
             }
-            val stroke = GestureDescription.StrokeDescription(path, 0, LIST_SCROLL_DURATION_MS)
-            val ok = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-            Log.i(TAG, "List scroll dispatched=$ok")
+            val startX = win.left + win.width() * 0.55f
+            val startY = win.top + win.height() * (if (directionDown) 0.62f else 0.38f)
+            val endY = win.top + win.height() * (if (directionDown) 0.32f else 0.68f)
+
+            dispatchGuarded(
+                gen = myGen,
+                points = listOf(startX to startY, startX to endY),
+                what = "list scroll",
+                build = {
+                    val path = Path().apply {
+                        moveTo(startX, startY)
+                        lineTo(startX, endY)
+                    }
+                    GestureDescription.Builder()
+                        .addStroke(GestureDescription.StrokeDescription(path, 0, LIST_SCROLL_DURATION_MS))
+                        .build()
+                }
+            )
         }
     }
 
@@ -770,24 +888,30 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // Bump generation: an explicit exit supersedes any in-flight sweep/advance chain.
         val myGen = ++actionGeneration
 
-        val screenW = 1080
-        val screenH = 2400
-        val gameTop = 132  // observed from uixml
+        val win = gameWindowBounds()
+        if (win == null || win.isEmpty) {
+            Log.w(TAG, "Career exit aborted: game window bounds unavailable")
+            return
+        }
+        // Window-relative (REQ-PL5). The fractions came from the fullscreen corpus.
+        val screenW = win.width()
+        val screenH = win.height()
+        val gameTop = win.top
 
         // Approximate locations derived from corpus menu screenshots (snap12 + give_up set).
         // Hamburger is typically near top-left of the content area.
-        val hamburgerX = (screenW * 0.06f).toInt()
+        val hamburgerX = win.left + (screenW * 0.06f).toInt()
         val hamburgerY = gameTop + (screenH * 0.03f).toInt()
 
         // Menu is a modal list. "Give Up" tends to be low in the list; "Save & Exit" above it.
         // Conservative taps near the lower half of the modal.
-        val menuItemX = (screenW * 0.5f).toInt()
-        val giveUpY = (screenH * 0.72f).toInt()
-        val saveExitY = (screenH * 0.66f).toInt()
+        val menuItemX = win.left + (screenW * 0.5f).toInt()
+        val giveUpY = win.top + (screenH * 0.72f).toInt()
+        val saveExitY = win.top + (screenH * 0.66f).toInt()
 
         // Confirmation modal affirmative is usually the right/primary action (or lower center).
-        val confirmX = (screenW * 0.72f).toInt()
-        val confirmY = (screenH * 0.78f).toInt()
+        val confirmX = win.left + (screenW * 0.72f).toInt()
+        val confirmY = win.top + (screenH * 0.78f).toInt()
 
         val targetY = if (preferSaveAndExit) saveExitY else giveUpY
         val label = if (preferSaveAndExit) "Save & Exit" else "Give Up"
@@ -797,19 +921,19 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
             // Step 1: open hamburger
             Log.i(TAG, "Exit flow: tap hamburger")
-            tap(hamburgerX.toFloat(), hamburgerY.toFloat(), 120)
+            tap(hamburgerX.toFloat(), hamburgerY.toFloat(), 120, myGen, "exit: hamburger")
 
             // Step 2: after modal animates, tap the menu item
             handler.postDelayed({
                 if (!canContinue(myGen)) return@postDelayed
                 Log.i(TAG, "Exit flow: tap $label")
-                tap(menuItemX.toFloat(), targetY.toFloat(), 140)
+                tap(menuItemX.toFloat(), targetY.toFloat(), 140, myGen, "exit: $label")
 
                 // Step 3: confirmation
                 handler.postDelayed({
                     if (!canContinue(myGen)) return@postDelayed
                     Log.i(TAG, "Exit flow: tap confirm")
-                    tap(confirmX.toFloat(), confirmY.toFloat(), 160)
+                    tap(confirmX.toFloat(), confirmY.toFloat(), 160, myGen, "exit: confirm")
 
                     // Optional post-confirm capture for logging
                     handler.postDelayed({
@@ -831,11 +955,22 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     /** [canContinue] plus the sweep kill switch, for the sweep/list-scroll chain. */
     private fun sweepCanContinue(gen: Int): Boolean = sweepEnabled && canContinue(gen)
 
-    private fun tap(x: Float, y: Float, durationMs: Long) {
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-        val ok = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-        if (!ok) Log.w(TAG, "tap dispatch failed at ($x,$y)")
+    /**
+     * Single tap, gated by the same REQ-SF7 checks as every other dispatch: the
+     * target app must still be foreground and the point must lie inside its window.
+     */
+    private fun tap(x: Float, y: Float, durationMs: Long, gen: Int, what: String = "tap") {
+        dispatchGuarded(
+            gen = gen,
+            points = listOf(x to y),
+            what = what,
+            build = {
+                val path = Path().apply { moveTo(x, y) }
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                    .build()
+            }
+        )
     }
 
     // ============================================================
@@ -941,10 +1076,26 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 }
             }
 
+            // Runs ONE sweep pass. Deliberately separate from the sweep toggle: the
+            // toggle only *arms* the assist (REQ-A10), and REQ-A5 requires a fresh
+            // explicit user command for each pass — arming must never start anything.
+            // This is also the only in-game way to start a sweep at all: MainActivity
+            // cannot do it, because foregrounding MainActivity makes Uma non-foreground
+            // and the sweep is then correctly refused.
+            val runCell = makeCell(GLYPH_RUN) {
+                armAutoCollapse()
+                if (!sweepEnabled) {
+                    Log.i(TAG, "Run ignored: sweep not armed")
+                } else {
+                    performTrainingSweepOnce()
+                }
+            }
+
             root.addView(handle)
             root.addView(sweepCell)
             root.addView(voiceCell)
             root.addView(readCell)
+            root.addView(runCell)
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -964,6 +1115,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             overlaySweepCell = sweepCell
             overlayVoiceCell = voiceCell
             overlayReadCell = readCell
+            overlayRunCell = runCell
             overlayParams = params
 
             applyOverlayGeometry()
@@ -989,7 +1141,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val osButton = findAccessibilityButtonBounds()
         val cell = osButton?.width() ?: defaultCellPx()
 
-        for (v in listOfNotNull(overlayHandle, overlaySweepCell, overlayVoiceCell, overlayReadCell)) {
+        for (v in listOfNotNull(overlayHandle, overlaySweepCell, overlayVoiceCell, overlayReadCell, overlayRunCell)) {
             val lp = LinearLayout.LayoutParams(cell, cell)
             lp.topMargin = CELL_GAP_PX
             v.layoutParams = lp
@@ -1047,12 +1199,27 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         clearOverlayRefs()
     }
 
+    /**
+     * Static state in the companion object outlives this instance (the process can
+     * survive an accessibility-service unbind/rebind), so reset the pieces that
+     * describe "where we are right now" on teardown. Otherwise the next instance
+     * inherits a stale view of the world.
+     */
+    private fun resetTransientState() {
+        isInUma = false
+        lastOcrText = ""
+        lastWasNoChoice = false
+        lastMatchReason = ""
+        lastReadSummary = null
+    }
+
     private fun clearOverlayRefs() {
         overlayView = null
         overlayHandle = null
         overlaySweepCell = null
         overlayVoiceCell = null
         overlayReadCell = null
+        overlayRunCell = null
         overlayParams = null
         overlayExpanded = false
         lastOsButtonBounds = null
@@ -1095,6 +1262,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         overlaySweepCell?.visibility = childVisibility
         overlayVoiceCell?.visibility = childVisibility
         overlayReadCell?.visibility = childVisibility
+        overlayRunCell?.visibility = childVisibility
+        // Run is only meaningful once sweep is armed; show that rather than failing
+        // silently when tapped.
+        overlayRunCell?.text = if (sweepEnabled) GLYPH_RUN else GLYPH_RUN_BLOCKED
+        overlayRunCell?.setBackgroundColor(if (sweepEnabled) CELL_ON_COLOR else CELL_IDLE_COLOR)
 
         // The handle itself doubles as the at-a-glance status indicator so the
         // collapsed state still communicates whether anything is armed.
@@ -1103,14 +1275,4 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         overlayHandle?.setBackgroundColor(if (armed) CELL_ON_COLOR else CELL_IDLE_COLOR)
     }
 
-    // Gesture helper (will be expanded)
-    private fun hover(rect: Rect, dwellMs: Long) {
-        val path = Path().apply {
-            moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, dwellMs))
-            .build()
-        dispatchGesture(gesture, null, null)
-    }
 }
