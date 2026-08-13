@@ -74,5 +74,5 @@ if [[ -d "$GRADLE_HOME/caches" ]]; then
 fi
 
 echo "==> FreeBSD prepare complete"
-echo "    Build with:  ./gradlew :app:assembleDebug"
+echo "    Build with:  ./gradlew :app:assembleDebug :app:assembleRelease"
 echo "    (os.name is spoofed to Linux for AGP; real tools run via Linuxulator)"
