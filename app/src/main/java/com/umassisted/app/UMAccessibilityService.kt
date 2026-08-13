@@ -52,6 +52,16 @@ class UMAccessibilityService : AccessibilityService() {
 
         // Weak holder so the Activity can request actions on the live service instance.
         @Volatile var instance: UMAccessibilityService? = null
+
+        fun isRunning(): Boolean = instance != null
+
+        // Anti-recursion / anti-overlap (service-health): bumped at the start of every
+        // top-level explicit command (sweep, advance, exit, scroll). Any in-flight
+        // handler.postDelayed chain captures the generation it started with and checks
+        // it before each step, so starting a *new* explicit command cleanly invalidates
+        // stale steps from a *previous* one instead of letting two sequences interleave
+        // their gesture dispatches. Reinforces REQ-A5 (no unattended/overlapping loops).
+        @Volatile var actionGeneration: Int = 0
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -65,8 +75,17 @@ class UMAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        val pkg = event.packageName?.toString()
-        if (pkg != TARGET_PACKAGE) {
+        // REQ-SF3: isInUma must reflect whether Umamusume is genuinely the *foreground*
+        // app right now, not merely the source package of some incoming event. The
+        // packageNames filter in accessibility_service_config.xml only restricts which
+        // package events are delivered FROM — a backgrounded Uma process can still emit
+        // window-content-changed events (cached activity, notification, etc.) while a
+        // different app is actually on screen. rootInActiveWindow reflects the window
+        // the system currently considers active, which is what "foreground" means here.
+        val activePkg = rootInActiveWindow?.packageName?.toString()
+        val nowInUma = activePkg == TARGET_PACKAGE
+
+        if (!nowInUma) {
             if (isInUma) {
                 // Leaving the target app — clear transient capture state (hygiene).
                 isInUma = false
@@ -77,7 +96,7 @@ class UMAccessibilityService : AccessibilityService() {
             return
         }
         isInUma = true
-        lastForegroundPackage = pkg
+        lastForegroundPackage = activePkg
 
         // Alpha: we do not auto-react on every event.
         // Real work is driven by explicit user commands (sweep, voice, or manual capture).
@@ -87,11 +106,23 @@ class UMAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         // Required override. Stop any pending actions.
         handler.removeCallbacksAndMessages(null)
+        actionGeneration++ // invalidate any in-flight command chain
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "Service unbinding")
+        handler.removeCallbacksAndMessages(null)
+        actionGeneration++
+        if (instance === this) instance = null
         return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.i(TAG, "Service destroyed")
+        handler.removeCallbacksAndMessages(null)
+        actionGeneration++
+        if (instance === this) instance = null
     }
 
     // ============================================================
@@ -229,12 +260,31 @@ class UMAccessibilityService : AccessibilityService() {
 
         takeScreenshot(0, ocrExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
-                val bitmap: android.graphics.Bitmap = try {
-                    result.javaClass.getMethod("getBitmap").invoke(result) as android.graphics.Bitmap
+                // ScreenshotResult has no getBitmap() — the real API exposes a
+                // HardwareBuffer + ColorSpace, wrapped into a Bitmap. The buffer must be
+                // closed once wrapped (Bitmap keeps its own reference to the data), and
+                // ML Kit / most software bitmap ops reject Config.HARDWARE, so we copy
+                // down to a software ARGB_8888 bitmap immediately.
+                val hardwareBuffer = result.hardwareBuffer
+                val bitmap: android.graphics.Bitmap? = try {
+                    android.graphics.Bitmap.wrapHardwareBuffer(hardwareBuffer, result.colorSpace)
+                        ?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
                 } catch (t: Throwable) {
-                    Log.e(TAG, "Could not extract bitmap from ScreenshotResult via reflection", t)
-                    android.graphics.Bitmap.createBitmap(10, 10, android.graphics.Bitmap.Config.ARGB_8888)
+                    Log.e(TAG, "Could not build Bitmap from screenshot HardwareBuffer", t)
+                    null
+                } finally {
+                    hardwareBuffer.close()
                 }
+
+                if (bitmap == null) {
+                    Log.e(TAG, "Screenshot bitmap unavailable; aborting OCR")
+                    lastOcrText = ""
+                    lastWasNoChoice = false
+                    lastMatchReason = ""
+                    onResult?.invoke("", false)
+                    return
+                }
+
                 val image = InputImage.fromBitmap(bitmap, 0)
 
                 textRecognizer.process(image)
@@ -307,6 +357,11 @@ class UMAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "Training sweep starting (explicit user command)")
 
+        // Bump + capture the generation so a *new* explicit command (another sweep,
+        // an exit, etc.) issued while this chain is still running invalidates every
+        // remaining queued step below, instead of letting two sequences interleave.
+        val myGen = ++actionGeneration
+
         val doSweep: () -> Unit = {
             // Pragmatic alpha geometry for 1080x2400 (common in the corpus).
             // Real implementation will compute rects from vision + labeled corpus.
@@ -323,8 +378,8 @@ class UMAccessibilityService : AccessibilityService() {
             )
 
             handler.post {
-                if (!sweepEnabled || !isInUma) {
-                    Log.i(TAG, "Sweep aborted before start (kill switch or left game)")
+                if (!sweepCanContinue(myGen)) {
+                    Log.i(TAG, "Sweep aborted before start (kill switch, left game, or superseded)")
                     return@post
                 }
 
@@ -335,24 +390,24 @@ class UMAccessibilityService : AccessibilityService() {
                         // After the hover pass, if sweep is still armed, do one list scroll
                         // (REQ-A16: list auto-scroll behavior when sweep toggle is on).
                         // Still driven by the initial explicit command; no self-loop.
-                        if (sweepEnabled && isInUma) {
+                        if (sweepCanContinue(myGen)) {
                             handler.postDelayed({
-                                if (sweepEnabled && isInUma) {
+                                if (sweepCanContinue(myGen)) {
                                     performListScrollOnce(directionDown = true)
                                 }
                             }, 220)
 
                             // Optional post-sweep capture for logging / replay seeding
                             handler.postDelayed({
-                                if (sweepEnabled && isInUma) {
+                                if (sweepCanContinue(myGen)) {
                                     captureAndAnalyzeScreen { _, _ -> /* just log */ }
                                 }
                             }, 900)
                         }
                         return
                     }
-                    if (!sweepEnabled || !isInUma) {
-                        Log.i(TAG, "Sweep stopped by user or scope exit")
+                    if (!sweepCanContinue(myGen)) {
+                        Log.i(TAG, "Sweep stopped by user, scope exit, or superseded command")
                         return
                     }
 
@@ -376,9 +431,9 @@ class UMAccessibilityService : AccessibilityService() {
                             // Post-hover capture (explicit sweep command still in progress).
                             // This populates lastOcrText / lastMatchReason and logs recognizable
                             // facility context for later vision work (no automation side-effect).
-                            if (sweepEnabled && isInUma) {
+                            if (sweepCanContinue(myGen)) {
                                 handler.postDelayed({
-                                    if (sweepEnabled && isInUma) {
+                                    if (sweepCanContinue(myGen)) {
                                         captureAndAnalyzeScreen { txt, _ ->
                                             val hit = listOf("Speed", "Stamina", "Power", "Guts", "Wit", "energy", "failure")
                                                 .firstOrNull { txt.contains(it, ignoreCase = true) }
@@ -389,7 +444,9 @@ class UMAccessibilityService : AccessibilityService() {
                             }
 
                             index++
-                            handler.postDelayed({ hoverNext() }, SWEEP_INTER_HOVER_PAUSE_MS)
+                            // Live sweepEnabled/isInUma are re-checked at the top of the next
+                            // hoverNext() call itself; only the overlap guard is needed here.
+                            if (myGen == actionGeneration) handler.postDelayed({ hoverNext() }, SWEEP_INTER_HOVER_PAUSE_MS)
                         }
 
                         override fun onCancelled(gestureDescription: GestureDescription) {
@@ -400,7 +457,7 @@ class UMAccessibilityService : AccessibilityService() {
                     if (!dispatched) {
                         Log.w(TAG, "Failed to dispatch hover gesture")
                         index++
-                        handler.postDelayed({ hoverNext() }, 300)
+                        if (myGen == actionGeneration) handler.postDelayed({ hoverNext() }, 300)
                     }
                 }
 
@@ -411,8 +468,9 @@ class UMAccessibilityService : AccessibilityService() {
 
         if (captureFirst) {
             captureAndAnalyzeScreen { _, _ ->
-                // Give the OCR a moment, then sweep
-                handler.postDelayed(doSweep, 400)
+                // Give the OCR a moment, then sweep (doSweep's own handler.post
+                // re-checks sweepCanContinue live, so only the overlap guard matters here).
+                if (myGen == actionGeneration) handler.postDelayed(doSweep, 400)
                 Unit   // ensure the callback lambda returns Unit
             }
         } else {
@@ -437,6 +495,10 @@ class UMAccessibilityService : AccessibilityService() {
             Log.w(TAG, "No-choice advance blocked: not in Uma")
             return
         }
+
+        // Explicit advance supersedes any in-flight sweep/exit chain (service-health:
+        // anti-overlap). See actionGeneration doc on the companion object.
+        actionGeneration++
 
         // REQ-A4: prefer any previously recorded user decision for this screen.
         val sig = signatureFor(lastOcrText)
@@ -589,6 +651,9 @@ class UMAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "Career exit requested (explicit) preferSaveAndExit=$useSave (recorded=${recorded ?: "none"})")
 
+        // Bump generation: an explicit exit supersedes any in-flight sweep/advance chain.
+        val myGen = ++actionGeneration
+
         val screenW = 1080
         val screenH = 2400
         val gameTop = 132  // observed from uixml
@@ -612,7 +677,7 @@ class UMAccessibilityService : AccessibilityService() {
         val label = if (preferSaveAndExit) "Save & Exit" else "Give Up"
 
         handler.post {
-            if (!isInUma) return@post
+            if (!canContinue(myGen)) return@post
 
             // Step 1: open hamburger
             Log.i(TAG, "Exit flow: tap hamburger")
@@ -620,24 +685,35 @@ class UMAccessibilityService : AccessibilityService() {
 
             // Step 2: after modal animates, tap the menu item
             handler.postDelayed({
-                if (!isInUma) return@postDelayed
+                if (!canContinue(myGen)) return@postDelayed
                 Log.i(TAG, "Exit flow: tap $label")
                 tap(menuItemX.toFloat(), targetY.toFloat(), 140)
 
                 // Step 3: confirmation
                 handler.postDelayed({
-                    if (!isInUma) return@postDelayed
+                    if (!canContinue(myGen)) return@postDelayed
                     Log.i(TAG, "Exit flow: tap confirm")
                     tap(confirmX.toFloat(), confirmY.toFloat(), 160)
 
                     // Optional post-confirm capture for logging
                     handler.postDelayed({
-                        if (isInUma) captureAndAnalyzeScreen { _, _ -> }
+                        if (canContinue(myGen)) captureAndAnalyzeScreen { _, _ -> }
                     }, 800)
                 }, 900)
             }, 650)
         }
     }
+
+    /**
+     * True while still safe to continue a chain started under generation [gen]:
+     * still in the target app, and no newer explicit command has superseded it.
+     * Single source of truth so postDelayed steps don't each spell out both
+     * conditions inline — call this at every async boundary in a command chain.
+     */
+    private fun canContinue(gen: Int): Boolean = isInUma && gen == actionGeneration
+
+    /** [canContinue] plus the sweep kill switch, for the sweep/list-scroll chain. */
+    private fun sweepCanContinue(gen: Int): Boolean = sweepEnabled && canContinue(gen)
 
     private fun tap(x: Float, y: Float, durationMs: Long) {
         val path = Path().apply { moveTo(x, y) }

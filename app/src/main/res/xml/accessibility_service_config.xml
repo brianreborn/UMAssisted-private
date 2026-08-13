@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- No packageNames filter (intentional, REQ-SF3): the service must observe window-state
+     events from OTHER apps too, so it can detect the user leaving Umamusume and clear
+     isInUma. Filtering to Uma-only silently starves that detection, since no event is
+     ever delivered for a different app gaining focus. Actions are still hard-gated to
+     TARGET_PACKAGE via isInUma in UMAccessibilityService, so this only widens what the
+     service can *observe*, never what it can *act on*. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
@@ -6,6 +12,5 @@
     android:canTakeScreenshot="true"
     android:canPerformGestures="true"
     android:notificationTimeout="100"
-    android:packageNames="com.cygames.umamusume"
     android:settingsActivity="com.umassisted.app.MainActivity"
     android:summary="UMAssisted - Aoharu Hai / Unity Cup assistance (1.0 alpha)" />
