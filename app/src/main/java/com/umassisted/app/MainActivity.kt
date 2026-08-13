@@ -41,21 +41,21 @@ class MainActivity : AppCompatActivity() {
         sweepButton = findViewById(R.id.sweepButton)
 
         // Initialize from current service state
-        sweepSwitch.isChecked = UMAccessibilityService.sweepEnabled
-        voiceSwitch.isChecked = UMAccessibilityService.voiceEnabled
+        sweepSwitch.isChecked = UMAssistedAccessibilityService.sweepEnabled
+        voiceSwitch.isChecked = UMAssistedAccessibilityService.voiceEnabled
 
         sweepSwitch.setOnCheckedChangeListener { _, isChecked ->
-            UMAccessibilityService.sweepEnabled = isChecked
-            UMAccessibilityService.instance?.setSweepEnabled(isChecked)
+            UMAssistedAccessibilityService.sweepEnabled = isChecked
+            UMAssistedAccessibilityService.instance?.setSweepEnabled(isChecked)
         }
 
         voiceSwitch.setOnCheckedChangeListener { _, isChecked ->
-            UMAccessibilityService.voiceEnabled = isChecked
-            UMAccessibilityService.instance?.setVoiceEnabled(isChecked)
+            UMAssistedAccessibilityService.voiceEnabled = isChecked
+            UMAssistedAccessibilityService.instance?.setVoiceEnabled(isChecked)
         }
 
         captureButton.setOnClickListener {
-            val svc = UMAccessibilityService.instance
+            val svc = UMAssistedAccessibilityService.instance
             if (svc != null) {
                 statusText.text = "Capturing + OCR..."
                 svc.captureAndAnalyzeScreen { text, isNoChoice ->
@@ -82,8 +82,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         sweepButton.setOnClickListener {
-            val svc = UMAccessibilityService.instance
-            if (svc != null && UMAccessibilityService.sweepEnabled) {
+            val svc = UMAssistedAccessibilityService.instance
+            if (svc != null && UMAssistedAccessibilityService.sweepEnabled) {
                 statusText.text = "Running training sweep..."
                 svc.performTrainingSweepOnce()
                 statusText.text = "Sweep command sent"
@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         // Fall back to generic no-choice advance only when last capture was a no-choice screen
         // and we have no recorded specific choice. Always explicit button press (REQ-A5).
         findViewById<Button>(R.id.advanceButton).setOnClickListener {
-            val svc = UMAccessibilityService.instance
+            val svc = UMAssistedAccessibilityService.instance
             if (svc != null) {
                 val sig = svc.signatureFor(svc.lastOcrText)
                 val hasRecorded = svc.getLastDecision(sig) != null
@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
         // 3) Else fall back to trying a replay (may be empty).
         // Still requires the user to press the button.
         findViewById<Button>(R.id.captureAndAdvanceButton).setOnClickListener {
-            val svc = UMAccessibilityService.instance
+            val svc = UMAssistedAccessibilityService.instance
             if (svc != null) {
                 statusText.text = "Capture + decide (replay or no-choice)..."
                 svc.captureAndAnalyzeScreen { text, isNoChoice ->
@@ -155,7 +155,7 @@ class MainActivity : AppCompatActivity() {
         // Always record using the service's normalized signatureFor so that later
         // capture + replay use a compatible key.
         findViewById<Button>(R.id.recordChoiceButton).setOnClickListener {
-            val svc = UMAccessibilityService.instance
+            val svc = UMAssistedAccessibilityService.instance
             if (svc != null && svc.lastOcrText.isNotBlank()) {
                 val sig = svc.signatureFor(svc.lastOcrText)
                 val chosen = deriveChosenAction(svc)
@@ -168,7 +168,7 @@ class MainActivity : AppCompatActivity() {
 
         // Explicit career exit (REQ-F5 alpha scope). Always user-initiated only.
         findViewById<Button>(R.id.exitCareerButton).setOnClickListener {
-            val svc = UMAccessibilityService.instance
+            val svc = UMAssistedAccessibilityService.instance
             if (svc != null) {
                 statusText.text = "Exit career command sent..."
                 // Default to Give Up path for alpha; a future settings toggle can choose Save & Exit.
@@ -181,8 +181,8 @@ class MainActivity : AppCompatActivity() {
 
         // List auto-scroll (REQ-A16). Only when sweep is armed; explicit user command.
         findViewById<Button>(R.id.scrollListButton).setOnClickListener {
-            val svc = UMAccessibilityService.instance
-            if (svc != null && UMAccessibilityService.sweepEnabled) {
+            val svc = UMAssistedAccessibilityService.instance
+            if (svc != null && UMAssistedAccessibilityService.sweepEnabled) {
                 statusText.text = "Scrolling list..."
                 svc.performListScrollOnce(directionDown = true)
                 statusText.text = "List scroll sent"
@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
      *  - Else try to find a short distinctive phrase from the OCR text (first "meaningful" line-ish chunk).
      *  - Fallback to generic "ADVANCE".
      */
-    private fun deriveChosenAction(svc: UMAccessibilityService): String {
+    private fun deriveChosenAction(svc: UMAssistedAccessibilityService): String {
         val reason = svc.lastMatchReason.lowercase()
         val tokens = listOf("close", "next", "ok", "confirm", "race", "enter", "continue",
                             "skip", "results", "done", "finish", "replay", "watch", "give up", "save & exit")

@@ -10,7 +10,7 @@
 # MainActivity/UMAssistedApp are manifest-referenced and kept by AGP's generated
 # rules, but the service is the one whose behavior is hardest to debug if R8
 # gets it wrong, so keep it whole and explicit.
--keep class com.umassisted.app.UMAccessibilityService { *; }
+-keep class com.umassisted.app.UMAssistedAccessibilityService { *; }
 
 # Referenced from the accessibility service config / manifest.
 -keep class com.umassisted.app.MainActivity { *; }

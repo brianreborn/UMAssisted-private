@@ -16,7 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.TextView
 import androidx.core.app.NotificationChannelCompat
@@ -38,7 +38,7 @@ import java.util.concurrent.Executors
  * - REQ-SF1/3: Only act on com.cygames.umamusume when it is foreground.
  * - Kill switches (overlay toggles) always take effect immediately.
  */
-class UMAccessibilityService : AccessibilityService() {
+class UMAssistedAccessibilityService : AccessibilityService() {
 
     companion object {
         const val TAG = "UMAssisted"
@@ -60,7 +60,7 @@ class UMAccessibilityService : AccessibilityService() {
         @Volatile var autoAdvanceOnNoChoice = false
 
         // Weak holder so the Activity can request actions on the live service instance.
-        @Volatile var instance: UMAccessibilityService? = null
+        @Volatile var instance: UMAssistedAccessibilityService? = null
 
         fun isRunning(): Boolean = instance != null
 
@@ -71,6 +71,36 @@ class UMAccessibilityService : AccessibilityService() {
         // stale steps from a *previous* one instead of letting two sequences interleave
         // their gesture dispatches. Reinforces REQ-A5 (no unattended/overlapping loops).
         @Volatile var actionGeneration: Int = 0
+
+        // === Overlay appearance (REQ-A17: small, icon-only, no OCR-able words) ===
+        // Emoji rather than line glyphs: they carry state in colour/shape at a glance
+        // without any words, which keeps the panel readable at OS-button size and
+        // contributes nothing OCR-able if a capture path ever composites us in.
+        private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+        private const val GLYPH_ARMED = "🟢"     // something is armed
+        private const val GLYPH_IDLE = "⚪"      // nothing armed
+        private const val GLYPH_SWEEP = "🧹"     // sweep + list auto-scroll
+        private const val GLYPH_VOICE = "🎤"     // voice listening
+        private const val GLYPH_READ = "👁"      // read screen (OCR only, no input)
+        private const val GLYPH_READ_NOCHOICE = "✅"  // last read: safe to advance
+        private const val GLYPH_READ_CHOICE = "❓"    // last read: has a real choice
+        private const val GLYPH_READ_EMPTY = "❌"     // last read: nothing recognised
+        private const val GLYPH_READ_PENDING = "⏳"   // read in flight
+        // Internal state tokens for the read cell (kept separate from the glyphs so
+        // the display can change without touching the state machine).
+        private const val READ_PENDING = "pending"
+        private const val READ_NOCHOICE = "nochoice"
+        private const val READ_CHOICE = "choice"
+        private const val READ_EMPTY = "empty"
+        // Docked flush to the OS button — the two are one control cluster, so any gap
+        // just reads as two competing widgets and wastes occlusion budget (REQ-A17).
+        private const val DOCK_GAP_PX = 0
+        private const val CELL_GAP_PX = 2
+        private const val DEFAULT_CELL_DP = 48f     // only used if the OS button is absent
+        private const val TEXT_SIZE_RATIO = 0.42f
+        private const val AUTO_COLLAPSE_MS = 5_000L
+        private const val CELL_IDLE_COLOR = 0xCC1B1B1B.toInt()
+        private const val CELL_ON_COLOR = 0xCC0F766E.toInt()
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -78,9 +108,13 @@ class UMAccessibilityService : AccessibilityService() {
 
     // Overlay kill switches (REQ-A7 / REQ-A10 / REQ-V9)
     private var overlayView: View? = null
-    private var overlayStatusText: TextView? = null
-    private var overlaySweepSwitch: Switch? = null
-    private var overlayVoiceSwitch: Switch? = null
+    private var overlayHandle: TextView? = null
+    private var overlaySweepCell: TextView? = null
+    private var overlayVoiceCell: TextView? = null
+    private var overlayReadCell: TextView? = null
+    private var overlayParams: WindowManager.LayoutParams? = null
+    private var overlayExpanded = false
+    private var lastOsButtonBounds: Rect? = null
 
     // Result of the last overlay "Read screen" tap. Held in state rather than
     // written straight to the TextView because refreshOverlay() runs on every
@@ -838,6 +872,46 @@ class UMAccessibilityService : AccessibilityService() {
     // so it never lingers over another app (REQ-SF1).
     // ============================================================
 
+    /**
+     * Probe: what windows can we actually see, and can we locate the OS
+     * accessibility floating button ("FloatingMenu") so the overlay can size and
+     * position itself against it? Its size and position are user-customizable, so
+     * reading it at runtime beats hardcoding or depending on @hide settings keys.
+     */
+    private fun findAccessibilityButtonBounds(): Rect? {
+        return try {
+            windows.asSequence()
+                .mapNotNull { w ->
+                    val b = Rect()
+                    w.getBoundsInScreen(b)
+                    if (w.root?.packageName == SYSTEM_UI_PACKAGE) b else null
+                }
+                // The floating a11y button is a small, roughly square systemui window.
+                // The other systemui windows on screen are the status bar, nav bar and
+                // screen-decor overlay, which are all full-width strips — so squareness
+                // plus a size ceiling separates them without hardcoding any geometry.
+                .firstOrNull { b ->
+                    val w = b.width()
+                    val h = b.height()
+                    w in 40..400 && h in 40..400 && w.toFloat() / h.toFloat() in 0.6f..1.6f
+                }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not read window list to locate the a11y button", t)
+            null
+        }
+    }
+
+    /** One square control in the overlay, sized to match the OS button. */
+    private fun makeCell(glyph: String, onTap: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = glyph
+            gravity = Gravity.CENTER
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(CELL_IDLE_COLOR)
+            setOnClickListener { onTap() }
+        }
+    }
+
     private fun showOverlay() {
         if (overlayView != null) {
             refreshOverlay()
@@ -845,83 +919,188 @@ class UMAccessibilityService : AccessibilityService() {
         }
         try {
             val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-            val view = LayoutInflater.from(this).inflate(R.layout.overlay_control, null)
 
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.END
-                x = 16
-                y = 96
-            }
+            val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-            overlayStatusText = view.findViewById(R.id.overlayStatusText)
-            overlaySweepSwitch = view.findViewById<Switch>(R.id.overlaySweepSwitch).apply {
-                isChecked = sweepEnabled
-                setOnCheckedChangeListener { _, checked -> setSweepEnabled(checked) }
-            }
-            overlayVoiceSwitch = view.findViewById<Switch>(R.id.overlayVoiceSwitch).apply {
-                isChecked = voiceEnabled
-                setOnCheckedChangeListener { _, checked -> setVoiceEnabled(checked) }
-            }
-            view.findViewById<Button>(R.id.overlayCaptureButton).setOnClickListener {
+            // Collapsed handle. Tapping expands; tapping again collapses.
+            val handle = makeCell(GLYPH_IDLE) { toggleOverlayExpanded() }
+            val sweepCell = makeCell(GLYPH_SWEEP) { setSweepEnabled(!sweepEnabled); armAutoCollapse() }
+            val voiceCell = makeCell(GLYPH_VOICE) { setVoiceEnabled(!voiceEnabled); armAutoCollapse() }
+            val readCell = makeCell(GLYPH_READ) {
                 // Read-only: screenshot + OCR, no gesture dispatch (REQ-DEV1/2/3).
-                lastReadSummary = "reading…"
+                lastReadSummary = READ_PENDING
                 refreshOverlay()
+                armAutoCollapse()
                 captureAndAnalyzeScreen { text, noChoice ->
                     lastReadSummary = when {
-                        text.isBlank() -> "read nothing"
-                        noChoice -> "no-choice"
-                        else -> "has-choice"
+                        text.isBlank() -> READ_EMPTY
+                        noChoice -> READ_NOCHOICE
+                        else -> READ_CHOICE
                     }
                     handler.post { refreshOverlay() }
                 }
             }
 
-            wm.addView(view, params)
-            overlayView = view
+            root.addView(handle)
+            root.addView(sweepCell)
+            root.addView(voiceCell)
+            root.addView(readCell)
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                // LAYOUT_IN_SCREEN/NO_LIMITS so x/y are true screen coordinates. Without
+                // them the offsets are measured from the inset content frame, which put
+                // us a status-bar's height below the OS button instead of flush to it.
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+
+            overlayView = root
+            overlayHandle = handle
+            overlaySweepCell = sweepCell
+            overlayVoiceCell = voiceCell
+            overlayReadCell = readCell
+            overlayParams = params
+
+            applyOverlayGeometry()
+            wm.addView(root, params)
             refreshOverlay()
             Log.i(TAG, "Overlay shown")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to show overlay", t)
-            overlayView = null
+            clearOverlayRefs()
         }
+    }
+
+    /**
+     * Size every cell to the OS accessibility button and dock the column directly
+     * beneath it. The user can move and resize that button (Settings > Accessibility
+     * > shortcut), so both the collapsed handle and the expanded column are derived
+     * from its live bounds rather than fixed dp — REQ-A17's "smallest footprint that
+     * is still hittable" is defined by whatever the user already chose as a
+     * comfortable target size, not by a number we picked.
+     */
+    private fun applyOverlayGeometry() {
+        val params = overlayParams ?: return
+        val osButton = findAccessibilityButtonBounds()
+        val cell = osButton?.width() ?: defaultCellPx()
+
+        for (v in listOfNotNull(overlayHandle, overlaySweepCell, overlayVoiceCell, overlayReadCell)) {
+            val lp = LinearLayout.LayoutParams(cell, cell)
+            lp.topMargin = CELL_GAP_PX
+            v.layoutParams = lp
+            // COMPLEX_UNIT_PX: the cell size is already in pixels, and the default
+            // textSize setter interprets sp, which over-scales by the display density.
+            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, cell * TEXT_SIZE_RATIO)
+        }
+
+        if (osButton != null) {
+            // Dock under the button, aligned to its edge, so the two read as one
+            // cluster instead of two competing corners.
+            params.x = osButton.left
+            params.y = osButton.bottom + DOCK_GAP_PX
+            lastOsButtonBounds = Rect(osButton)
+        } else {
+            // Shortcut not enabled (no floating button) — fall back to a top-right rest
+            // position that still avoids the status bar.
+            val dm = resources.displayMetrics
+            params.x = dm.widthPixels - cell - DOCK_GAP_PX
+            params.y = (dm.heightPixels * 0.10f).toInt()
+            lastOsButtonBounds = null
+        }
+    }
+
+    private fun defaultCellPx(): Int =
+        (DEFAULT_CELL_DP * resources.displayMetrics.density).toInt()
+
+    private fun toggleOverlayExpanded() {
+        overlayExpanded = !overlayExpanded
+        refreshOverlay()
+        if (overlayExpanded) armAutoCollapse() else handler.removeCallbacks(collapseRunnable)
+    }
+
+    private val collapseRunnable = Runnable {
+        if (overlayExpanded) {
+            overlayExpanded = false
+            refreshOverlay()
+        }
+    }
+
+    private fun armAutoCollapse() {
+        handler.removeCallbacks(collapseRunnable)
+        handler.postDelayed(collapseRunnable, AUTO_COLLAPSE_MS)
     }
 
     private fun hideOverlay() {
         val view = overlayView ?: return
+        handler.removeCallbacks(collapseRunnable)
         try {
             (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(view)
             Log.i(TAG, "Overlay hidden")
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to remove overlay view", t)
         }
+        clearOverlayRefs()
+    }
+
+    private fun clearOverlayRefs() {
         overlayView = null
-        overlayStatusText = null
-        overlaySweepSwitch = null
-        overlayVoiceSwitch = null
+        overlayHandle = null
+        overlaySweepCell = null
+        overlayVoiceCell = null
+        overlayReadCell = null
+        overlayParams = null
+        overlayExpanded = false
+        lastOsButtonBounds = null
     }
 
     /**
-     * Keep the overlay's switches/status in sync with live state, regardless of
-     * whether the change originated from the overlay itself or from MainActivity.
-     * Safe to call when the overlay isn't currently shown (no-op).
+     * Keep the overlay in sync with live state, regardless of whether a change came
+     * from the overlay, MainActivity, or the user moving/resizing the OS button.
+     * Safe to call when the overlay isn't shown (no-op).
      */
     fun refreshOverlay() {
-        val sweepSwitch = overlaySweepSwitch ?: return
-        val voiceSwitch = overlayVoiceSwitch ?: return
-        if (sweepSwitch.isChecked != sweepEnabled) sweepSwitch.isChecked = sweepEnabled
-        if (voiceSwitch.isChecked != voiceEnabled) voiceSwitch.isChecked = voiceEnabled
-        val read = lastReadSummary
-        overlayStatusText?.text = when {
-            read != null -> "UMAssisted — $read"
-            isInUma -> "UMAssisted — active"
-            else -> "UMAssisted"
+        val root = overlayView ?: return
+
+        // Re-derive geometry: the OS button is user-movable and user-resizable, so its
+        // bounds can change at any time without notifying us.
+        val current = findAccessibilityButtonBounds()
+        if (current != lastOsButtonBounds) {
+            applyOverlayGeometry()
+            try {
+                (getSystemService(WINDOW_SERVICE) as WindowManager)
+                    .updateViewLayout(root, overlayParams)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to reposition overlay", t)
+            }
         }
+
+        overlaySweepCell?.setBackgroundColor(if (sweepEnabled) CELL_ON_COLOR else CELL_IDLE_COLOR)
+        overlayVoiceCell?.setBackgroundColor(if (voiceEnabled) CELL_ON_COLOR else CELL_IDLE_COLOR)
+        // The read cell reports the last read's verdict rather than a generic icon —
+        // ✅ safe to advance, ❓ a real choice is on screen, ❌ nothing recognised.
+        overlayReadCell?.text = when (lastReadSummary) {
+            READ_NOCHOICE -> GLYPH_READ_NOCHOICE
+            READ_CHOICE -> GLYPH_READ_CHOICE
+            READ_EMPTY -> GLYPH_READ_EMPTY
+            READ_PENDING -> GLYPH_READ_PENDING
+            else -> GLYPH_READ
+        }
+
+        val childVisibility = if (overlayExpanded) View.VISIBLE else View.GONE
+        overlaySweepCell?.visibility = childVisibility
+        overlayVoiceCell?.visibility = childVisibility
+        overlayReadCell?.visibility = childVisibility
+
+        // The handle itself doubles as the at-a-glance status indicator so the
+        // collapsed state still communicates whether anything is armed.
+        val armed = sweepEnabled || voiceEnabled
+        overlayHandle?.text = if (armed) GLYPH_ARMED else GLYPH_IDLE
+        overlayHandle?.setBackgroundColor(if (armed) CELL_ON_COLOR else CELL_IDLE_COLOR)
     }
 
     // Gesture helper (will be expanded)

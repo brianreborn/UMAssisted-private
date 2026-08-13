@@ -22,7 +22,7 @@
 
         <!-- AccessibilityService declaration (REQ-M1, REQ-PL4 API 30+) -->
         <service
-            android:name=".UMAccessibilityService"
+            android:name=".UMAssistedAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:foregroundServiceType="specialUse"
             android:exported="false">
