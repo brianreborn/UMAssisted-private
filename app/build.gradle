@@ -105,3 +105,52 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.mlkit:text-recognition:16.0.0'
 }
+
+// Live-debugging Gradle tasks
+def getAdbExecutable() {
+    def sdkDir = android.sdkDirectory?.absolutePath
+    if (sdkDir) {
+        def adbFile = new File(sdkDir, 'platform-tools/adb')
+        if (adbFile.exists()) return adbFile.absolutePath
+    }
+    return 'adb'
+}
+
+tasks.register('grantPermissions', Exec) {
+    group = 'live debugging'
+    description = 'Grants Accessibility Service and System Overlay permissions via ADB'
+    commandLine getAdbExecutable(), 'shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', 'com.umassisted.app/.UMAssistedAccessibilityService'
+    doLast {
+        exec { commandLine getAdbExecutable(), 'shell', 'settings', 'put', 'secure', 'accessibility_enabled', '1' }
+        exec { commandLine getAdbExecutable(), 'shell', 'appops', 'set', 'com.umassisted.app', 'SYSTEM_ALERT_WINDOW', 'allow' }
+    }
+    ignoreExitValue = true
+}
+
+tasks.register('launchApp', Exec) {
+    group = 'live debugging'
+    description = 'Launches MainActivity on connected ADB device'
+    commandLine getAdbExecutable(), 'shell', 'am', 'start', '-n', 'com.umassisted.app/.MainActivity'
+    ignoreExitValue = true
+}
+
+tasks.register('liveDebug') {
+    group = 'live debugging'
+    description = 'Builds, installs debug APK, grants permissions, and launches app on ADB device'
+    dependsOn 'installDebug'
+    finalizedBy 'grantPermissions', 'launchApp'
+}
+
+tasks.register('streamLogs', Exec) {
+    group = 'live debugging'
+    description = 'Tails ADB logcat output filtered for com.umassisted.app'
+    commandLine getAdbExecutable(), 'logcat', '-v', 'time', 'com.umassisted.app:V', 'UMAssisted:V', 'AndroidRuntime:E', '*:S'
+}
+
+tasks.register('captureScreen', Exec) {
+    group = 'live debugging'
+    description = 'Captures screen using ~/UMAssisted/tools/capture_screen.sh'
+    commandLine 'bash', "${rootProject.rootDir}/../UMAssisted/tools/capture_screen.sh", 'live_debug', 'misc'
+    ignoreExitValue = true
+}
+

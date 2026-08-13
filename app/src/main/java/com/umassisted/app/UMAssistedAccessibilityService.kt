@@ -133,20 +133,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         instance = this
         startForegroundNotification()
 
-        // Establish initial foreground state here rather than waiting for an event.
-        // Accessibility events report *changes*; they are not a substitute for reading
-        // current state at startup. If the service starts while Umamusume is already
-        // foreground and the screen is static (a modal, a paused career, an idle
-        // menu), no window-state-change event is guaranteed to arrive, so isInUma
-        // would stay false and the always-visible kill switches (REQ-A7) would never
-        // appear — the user would have to switch apps and back to get them, with no
-        // indication why. This matters most on an OS-initiated rebind, which happens
-        // outside the user's control and mid-session (observed repeatedly during the
-        // FOREGROUND_SERVICE crash loop this build fixed).
-        //
-        // Posted with a short delay because rootInActiveWindow isn't reliably
-        // populated at the instant onServiceConnected runs.
-        handler.postDelayed({ updateForegroundState() }, 300)
+        // Immediate check if root window is already available; fallback post only if pending
+        if (rootInActiveWindow != null) {
+            updateForegroundState()
+        } else {
+            handler.postDelayed({ updateForegroundState() }, 100)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -599,116 +591,139 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     return@post
                 }
 
-                // ONE continuous gesture: the finger goes down once, slides between
-                // facilities, dwells on each, and only lifts after sliding clear of the
-                // row. Previously each facility got its own stroke, and a stroke ends by
-                // lifting the finger where it is — Unity fires a button on pointer-up
-                // inside its bounds, so a "dwell" was just a slow click and every
-                // facility was being committed in turn. Sliding off before release is
-                // how a person previews without committing, and is what makes this a
-                // preview rather than a selection (REQ-A9: hover, never confirm).
+                // One continuous finger motion, dispatched as a CHAIN of gestures.
+                //
+                // continueStroke() produces a stroke for a *subsequent* dispatchGesture
+                // call — it is not valid to stack continuation strokes inside a single
+                // GestureDescription. Doing that ran only the first stroke and, because
+                // that stroke carried willContinue=true, left the finger pressed down
+                // with no continuation ever arriving: the sweep "held and froze", and a
+                // stuck touch-down blocks the user's own input (REQ-SF1).
+                //
+                // So: one stroke per dispatch, each continuing the last, advanced from
+                // the previous gesture's onCompleted. The finger stays down across the
+                // whole chain and lifts only on the final segment.
                 val labels = arrayOf("Speed", "Stamina", "Power", "Guts", "Wit")
 
-                // A dwell is a stroke that barely moves. It is not a zero-length path:
-                // a single moveTo is an empty contour and not a valid stroke.
+                // A dwell is a stroke that barely moves. Not a zero-length path: a lone
+                // moveTo is an empty contour and not a valid stroke.
                 fun dwellPath(px: Int, py: Int) = Path().apply {
                     moveTo(px.toFloat(), py.toFloat())
                     lineTo(px + 1f, py.toFloat())
                 }
 
-                var elapsed = 0L
-                val strokes = mutableListOf<GestureDescription.StrokeDescription>()
+                // Segment plan: dwell on each facility, sliding between them. Nothing is
+                // committed because press and release happen on different facilities —
+                // the game only reads a tap when both land on the same one.
+                data class Segment(val name: String, val path: Path, val duration: Long)
 
+                val segments = mutableListOf<Segment>()
                 val (x0, y0) = positions[0]
-                var current = GestureDescription.StrokeDescription(
-                    dwellPath(x0, y0), 0L, SWEEP_DWELL_MS, true
-                )
-                strokes += current
-                elapsed += SWEEP_DWELL_MS
-
+                segments += Segment("dwell ${labels[0]}", dwellPath(x0, y0), SWEEP_DWELL_MS)
                 for (i in 1 until positions.size) {
                     val (ax, ay) = positions[i - 1]
                     val (bx, by) = positions[i]
-                    val slide = Path().apply {
-                        moveTo(ax.toFloat(), ay.toFloat())
-                        lineTo(bx.toFloat(), by.toFloat())
-                    }
-                    current = current.continueStroke(slide, elapsed, SWEEP_SLIDE_MS, true)
-                    strokes += current
-                    elapsed += SWEEP_SLIDE_MS
-
-                    current = current.continueStroke(dwellPath(bx, by), elapsed, SWEEP_DWELL_MS, true)
-                    strokes += current
-                    elapsed += SWEEP_DWELL_MS
+                    segments += Segment(
+                        "slide ${labels.getOrElse(i - 1) { "?" }}->${labels.getOrElse(i) { "?" }}",
+                        Path().apply {
+                            moveTo(ax.toFloat(), ay.toFloat())
+                            lineTo(bx.toFloat(), by.toFloat())
+                        },
+                        SWEEP_SLIDE_MS
+                    )
+                    segments += Segment("dwell ${labels.getOrElse(i) { "?" }}", dwellPath(bx, by), SWEEP_DWELL_MS)
                 }
-
-                // Slide clear of the facility row, then lift. Releasing here cancels the
-                // press instead of committing whichever facility we ended on.
+                // No slide-clear segment: the press began on Speed, so lifting on Wit is
+                // already a release on a different facility, which the game does not read
+                // as a tap. The finger simply lifts at the end of the final dwell.
                 val (lx, ly) = positions.last()
-                val releaseY = (ly - win.height() * SWEEP_RELEASE_FRAC).toInt()
-                val releasePath = Path().apply {
-                    moveTo(lx.toFloat(), ly.toFloat())
-                    lineTo(lx.toFloat(), releaseY.toFloat())
-                }
-                current = current.continueStroke(releasePath, elapsed, SWEEP_RELEASE_MS, false)
-                strokes += current
-                elapsed += SWEEP_RELEASE_MS
+                val releaseY = ly
 
-                val maxStrokes = GestureDescription.getMaxStrokeCount()
-                Log.i(
-                    TAG,
-                    "Sweep gesture: ${strokes.size} strokes (max $maxStrokes), " +
-                        "${elapsed}ms total (max ${GestureDescription.getMaxGestureDuration()}ms)"
-                )
-                if (strokes.size > maxStrokes) {
-                    Log.e(TAG, "Sweep aborted: ${strokes.size} strokes exceeds platform max $maxStrokes")
-                    return@post
-                }
+                val totalMs = segments.sumOf { it.duration }
+                Log.i(TAG, "Sweep plan: ${segments.size} segments, ${totalMs}ms total")
 
                 // Every point is bounds-checked before anything is dispatched (REQ-SF7).
                 val allPoints = positions.map { (px, py) -> px.toFloat() to py.toFloat() } +
                     listOf(lx.toFloat() to releaseY.toFloat())
-
-                dispatchGuarded(
-                    gen = myGen,
-                    points = allPoints,
-                    what = "training sweep (continuous, ${positions.size} facilities)",
-                    build = {
-                        val b = GestureDescription.Builder()
-                        strokes.forEach { b.addStroke(it) }
-                        b.build()
-                    },
-                    callback = object : GestureResultCallback() {
-                        override fun onCompleted(gestureDescription: GestureDescription) {
-                            Log.i(TAG, "Sweep gesture completed (finger lifted clear of the row)")
-                            if (sweepCanContinue(myGen)) {
-                                handler.postDelayed({
-                                    if (sweepCanContinue(myGen)) {
-                                        captureAndAnalyzeScreen { _, _ -> }
-                                    }
-                                }, 250)
-                            }
-                        }
-
-                        override fun onCancelled(gestureDescription: GestureDescription) {
-                            Log.w(TAG, "Sweep gesture cancelled")
-                        }
-                    }
-                )
-
-                // Log what is under the finger at each dwell, for corpus/vision work.
-                // Read-only; no input is dispatched from here.
-                var mark = 0L
-                for (i in positions.indices) {
-                    val at = mark + SWEEP_DWELL_MS / 2
-                    val label = labels.getOrElse(i) { "facility$i" }
-                    handler.postDelayed({
-                        if (sweepCanContinue(myGen)) {
-                            Log.i(TAG, "Sweep dwelling on $label")
-                        }
-                    }, at)
-                    mark += SWEEP_DWELL_MS + SWEEP_SLIDE_MS
+                val bounds = gameWindowBounds()
+                if (bounds == null || allPoints.any { !bounds.contains(it.first.toInt(), it.second.toInt()) }) {
+                    Log.w(TAG, "Sweep aborted: a planned point falls outside the game window $bounds")
+                    return@post
                 }
+
+                var lastStroke: GestureDescription.StrokeDescription? = null
+
+                /**
+                 * If the chain stops early for any reason, the finger is still down.
+                 * Lift it deliberately rather than leaving the user's screen pinned.
+                 */
+                fun releaseStuckFinger(reason: String) {
+                    val prev = lastStroke ?: return
+                    lastStroke = null
+                    Log.w(TAG, "Sweep interrupted ($reason) — lifting finger")
+                    val lift = prev.continueStroke(
+                        Path().apply {
+                            moveTo(lx.toFloat(), releaseY.toFloat())
+                            lineTo(lx.toFloat(), (releaseY - 1).toFloat())
+                        },
+                        0L, 60L, false
+                    )
+                    try {
+                        dispatchGesture(GestureDescription.Builder().addStroke(lift).build(), null, null)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Failed to lift finger after interrupted sweep", t)
+                    }
+                }
+
+                fun runSegment(index: Int) {
+                    if (index >= segments.size) {
+                        lastStroke = null
+                        Log.i(TAG, "Sweep complete — finger lifted clear of the row")
+                        if (sweepCanContinue(myGen)) {
+                            handler.postDelayed({
+                                if (sweepCanContinue(myGen)) captureAndAnalyzeScreen { _, _ -> }
+                            }, 250)
+                        }
+                        return
+                    }
+                    if (!sweepCanContinue(myGen)) {
+                        releaseStuckFinger("kill switch, left game, or superseded")
+                        return
+                    }
+
+                    val seg = segments[index]
+                    val isLast = index == segments.lastIndex
+                    val prev = lastStroke
+                    val stroke = if (prev == null) {
+                        GestureDescription.StrokeDescription(seg.path, 0L, seg.duration, !isLast)
+                    } else {
+                        prev.continueStroke(seg.path, 0L, seg.duration, !isLast)
+                    }
+                    lastStroke = stroke
+
+                    Log.i(TAG, "Sweep segment ${index + 1}/${segments.size}: ${seg.name}")
+
+                    val ok = dispatchGesture(
+                        GestureDescription.Builder().addStroke(stroke).build(),
+                        object : GestureResultCallback() {
+                            override fun onCompleted(gestureDescription: GestureDescription) {
+                                runSegment(index + 1)
+                            }
+
+                            override fun onCancelled(gestureDescription: GestureDescription) {
+                                Log.w(TAG, "Sweep segment ${index + 1} cancelled")
+                                lastStroke = null
+                            }
+                        },
+                        null
+                    )
+                    if (!ok) {
+                        Log.w(TAG, "Sweep segment ${index + 1} failed to dispatch")
+                        releaseStuckFinger("dispatch failed")
+                    }
+                }
+
+                runSegment(0)
             }
             Unit
         }
