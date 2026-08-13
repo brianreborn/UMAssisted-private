@@ -42,6 +42,12 @@ import android.util.Log
  *   (FacilityVocabulary) across all of them — if the top guess is wrong but
  *   the correct word shows up in alternate #2, that still counts.
  *
+ * Partial-results early stop: if the caller's isUnambiguousMatch predicate
+ * says a partial transcript already resolves cleanly (e.g. a clean facility
+ * name), the session is stopped right then via stopListening() rather than
+ * waiting out the rest of the configured silence timeout — a confident user
+ * shouldn't sit through dead air the app doesn't need.
+ *
  * Chime suppression: the audible start/end tone on every restart is not
  * played by SpeechRecognizer itself — it's the OEM recognition service
  * (visible in logcat as e.g. GoogleTTSRecognitionService) playing its own
@@ -57,7 +63,15 @@ import android.util.Log
 class VoiceListener(
     private val context: Context,
     private val handler: Handler,
-    private val onUtterances: (List<String>) -> Unit
+    private val onUtterances: (List<String>) -> Unit,
+    /**
+     * Called with each partial-results update; return true once the partial
+     * transcript already unambiguously resolves (e.g. a clean facility-name
+     * match). A true result stops the session early instead of waiting out
+     * the full silence timeout — the user shouldn't have to sit through
+     * dead air after saying something the app already understood.
+     */
+    private val isUnambiguousMatch: (List<String>) -> Boolean = { false }
 ) {
     companion object {
         private const val TAG = "VoiceListener"
@@ -69,6 +83,7 @@ class VoiceListener(
     private var recognizer: SpeechRecognizer? = null
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var savedSystemStreamVolume: Int? = null
+    @Volatile private var stoppedEarlyThisSession = false
 
     private val restartRunnable = Runnable { startSession() }
 
@@ -92,7 +107,23 @@ class VoiceListener(
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onPartialResults(partialResults: Bundle?) {}
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (stoppedEarlyThisSession) return
+            val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (!partial.isNullOrEmpty() && isUnambiguousMatch(partial)) {
+                // stopListening() (not cancel()) lets the recognizer finalize normally —
+                // onResults still fires with what it heard — it just doesn't wait out
+                // the rest of the configured silence timeout to get there.
+                stoppedEarlyThisSession = true
+                try {
+                    recognizer?.stopListening()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to stop early on unambiguous partial match", t)
+                }
+            }
+        }
+
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 
@@ -170,12 +201,16 @@ class VoiceListener(
     private fun startSession() {
         val r = recognizer ?: return
         if (!armed) return
+        stoppedEarlyThisSession = false
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             // Short command-style bias, not dictation — closer to a single facility name.
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            // Needed to receive onPartialResults at all, so an unambiguous match can
+            // stop the session early instead of waiting out the full silence timeout.
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             // The platform's own silence timeout — not our restart delay — is what was
             // ending each session almost immediately in a quiet room. These extend it so
             // the mic stays open and idle rather than closing/reopening on every brief

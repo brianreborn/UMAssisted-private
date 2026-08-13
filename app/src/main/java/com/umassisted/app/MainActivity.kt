@@ -42,14 +42,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sweepPassesGroup: View
     private lateinit var sweepPassCountLabel: TextView
     private lateinit var sweepPassCountSeekBar: SeekBar
+    private lateinit var sweepPassCountEditText: EditText
+    private lateinit var sweepPassCountSetButton: Button
     private lateinit var sweepPassSlowdownLabel: TextView
     private lateinit var sweepPassSlowdownSeekBar: SeekBar
+    private lateinit var sweepPassSlowdownEditText: EditText
+    private lateinit var sweepPassSlowdownSetButton: Button
     private lateinit var sweepRestartOnSignalSwitch: SwitchCompat
     private lateinit var sweepHeartbeatWindowLabel: TextView
     private lateinit var sweepHeartbeatWindowSeekBar: SeekBar
+    private lateinit var sweepHeartbeatWindowEditText: EditText
+    private lateinit var sweepHeartbeatWindowSetButton: Button
     private lateinit var voiceMuteChimeSwitch: SwitchCompat
     private lateinit var voiceSilenceTimeoutLabel: TextView
     private lateinit var voiceSilenceTimeoutSeekBar: SeekBar
+    private lateinit var voiceSilenceTimeoutEditText: EditText
+    private lateinit var voiceSilenceTimeoutSetButton: Button
 
     // Human-meaningful grid the period slider snaps to, rather than every raw
     // millisecond — matches how a person actually thinks about pacing ("about
@@ -80,14 +88,22 @@ class MainActivity : AppCompatActivity() {
         sweepPassesGroup = findViewById(R.id.sweepPassesGroup)
         sweepPassCountLabel = findViewById(R.id.sweepPassCountLabel)
         sweepPassCountSeekBar = findViewById(R.id.sweepPassCountSeekBar)
+        sweepPassCountEditText = findViewById(R.id.sweepPassCountEditText)
+        sweepPassCountSetButton = findViewById(R.id.sweepPassCountSetButton)
         sweepPassSlowdownLabel = findViewById(R.id.sweepPassSlowdownLabel)
         sweepPassSlowdownSeekBar = findViewById(R.id.sweepPassSlowdownSeekBar)
+        sweepPassSlowdownEditText = findViewById(R.id.sweepPassSlowdownEditText)
+        sweepPassSlowdownSetButton = findViewById(R.id.sweepPassSlowdownSetButton)
         sweepRestartOnSignalSwitch = findViewById(R.id.sweepRestartOnSignalSwitch)
         sweepHeartbeatWindowLabel = findViewById(R.id.sweepHeartbeatWindowLabel)
         sweepHeartbeatWindowSeekBar = findViewById(R.id.sweepHeartbeatWindowSeekBar)
+        sweepHeartbeatWindowEditText = findViewById(R.id.sweepHeartbeatWindowEditText)
+        sweepHeartbeatWindowSetButton = findViewById(R.id.sweepHeartbeatWindowSetButton)
         voiceMuteChimeSwitch = findViewById(R.id.voiceMuteChimeSwitch)
         voiceSilenceTimeoutLabel = findViewById(R.id.voiceSilenceTimeoutLabel)
         voiceSilenceTimeoutSeekBar = findViewById(R.id.voiceSilenceTimeoutSeekBar)
+        voiceSilenceTimeoutEditText = findViewById(R.id.voiceSilenceTimeoutEditText)
+        voiceSilenceTimeoutSetButton = findViewById(R.id.voiceSilenceTimeoutSetButton)
 
         // Initialize from current service state
         sweepSwitch.isChecked = UMAssistedAccessibilityService.sweepEnabled
@@ -359,33 +375,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Pass count / slowdown (DECELERATING_PASSES only; hidden otherwise)
-        sweepPassCountSeekBar.max = 5 // maps to UserSettings bound [1, 6]
-        val initialPassCount = UserSettings.getSweepPassCount()
-        sweepPassCountSeekBar.progress = initialPassCount - 1
-        sweepPassCountLabel.text = "Passes: $initialPassCount"
-        sweepPassCountSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                val count = progress + 1
-                sweepPassCountLabel.text = "Passes: $count"
-                if (fromUser) UserSettings.setSweepPassCount(count)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {}
-        })
+        wireLongSetting(
+            sweepPassCountEditText, sweepPassCountSetButton, sweepPassCountSeekBar, sweepPassCountLabel,
+            "Passes: ", "", 1L, 6L,
+            getter = { UserSettings.getSweepPassCount().toLong() },
+            setter = { UserSettings.setSweepPassCount(it.toInt()) }
+        )
 
-        sweepPassSlowdownSeekBar.max = 20 // 1.0x..3.0x in 0.1x steps
-        val initialSlowdown = UserSettings.getSweepPassSlowdownFactor()
-        sweepPassSlowdownSeekBar.progress = ((initialSlowdown - 1.0f) * 10).toInt()
-        sweepPassSlowdownLabel.text = "Slowdown per pass: ${"%.1f".format(initialSlowdown)}x"
-        sweepPassSlowdownSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                val factor = 1.0f + progress / 10f
-                sweepPassSlowdownLabel.text = "Slowdown per pass: ${"%.1f".format(factor)}x"
-                if (fromUser) UserSettings.setSweepPassSlowdownFactor(factor)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {}
-        })
+        wireFloatSetting(
+            sweepPassSlowdownEditText, sweepPassSlowdownSetButton, sweepPassSlowdownSeekBar, sweepPassSlowdownLabel,
+            "Slowdown per pass: ", "x", 1.0f, 3.0f, stepsPerUnit = 10,
+            getter = { UserSettings.getSweepPassSlowdownFactor() },
+            setter = { UserSettings.setSweepPassSlowdownFactor(it) }
+        )
 
         // REQ-A23/A24: duration axis, separate from period. Continuation is gated by a
         // continuation signal (voice today) so it stays a chain of explicit user
@@ -395,19 +397,12 @@ class MainActivity : AppCompatActivity() {
             UserSettings.setSweepRestartOnSignalEnabled(isChecked)
         }
 
-        sweepHeartbeatWindowSeekBar.max = 13000 // maps to [2000, 15000] via +2000 offset
-        val initialHeartbeatWindow = UserSettings.getSweepHeartbeatWindowMs()
-        sweepHeartbeatWindowSeekBar.progress = (initialHeartbeatWindow - 2000L).toInt()
-        sweepHeartbeatWindowLabel.text = "Signal window: $initialHeartbeatWindow ms"
-        sweepHeartbeatWindowSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                val ms = (progress + 2000).toLong()
-                sweepHeartbeatWindowLabel.text = "Signal window: $ms ms"
-                if (fromUser) UserSettings.setSweepHeartbeatWindowMs(ms)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {}
-        })
+        wireLongSetting(
+            sweepHeartbeatWindowEditText, sweepHeartbeatWindowSetButton, sweepHeartbeatWindowSeekBar, sweepHeartbeatWindowLabel,
+            "Signal window: ", " ms", 2000L, 15000L,
+            getter = { UserSettings.getSweepHeartbeatWindowMs() },
+            setter = { UserSettings.setSweepHeartbeatWindowMs(it) }
+        )
     }
 
     /**
@@ -421,19 +416,102 @@ class MainActivity : AppCompatActivity() {
             UserSettings.setVoiceMuteChimeEnabled(isChecked)
         }
 
-        voiceSilenceTimeoutSeekBar.max = 58000 // maps to [2000, 60000] via +2000 offset
-        val initialSilenceTimeout = UserSettings.getVoiceSilenceTimeoutMs()
-        voiceSilenceTimeoutSeekBar.progress = (initialSilenceTimeout - 2000L).toInt()
-        voiceSilenceTimeoutLabel.text = "Recognition silence timeout: $initialSilenceTimeout ms"
-        voiceSilenceTimeoutSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        wireLongSetting(
+            voiceSilenceTimeoutEditText, voiceSilenceTimeoutSetButton, voiceSilenceTimeoutSeekBar, voiceSilenceTimeoutLabel,
+            "Recognition silence timeout: ", " ms", 2000L, 60000L,
+            getter = { UserSettings.getVoiceSilenceTimeoutMs() },
+            setter = { UserSettings.setVoiceSilenceTimeoutMs(it) }
+        )
+    }
+
+    /**
+     * Standardized text-entry + Set button + SeekBar trio for a Long-valued
+     * setting, reused across every numeric option in both settings sections
+     * so they behave identically instead of each reinventing the pattern.
+     */
+    private fun wireLongSetting(
+        editText: EditText, setButton: Button, seekBar: SeekBar, label: TextView,
+        labelPrefix: String, labelSuffix: String, min: Long, max: Long,
+        getter: () -> Long, setter: (Long) -> Unit
+    ) {
+        fun render(value: Long) {
+            label.text = "$labelPrefix$value$labelSuffix"
+        }
+
+        seekBar.max = (max - min).toInt()
+        val initial = getter()
+        seekBar.progress = (initial - min).toInt()
+        render(initial)
+        editText.setText(initial.toString())
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                val ms = (progress + 2000).toLong()
-                voiceSilenceTimeoutLabel.text = "Recognition silence timeout: $ms ms"
-                if (fromUser) UserSettings.setVoiceSilenceTimeoutMs(ms)
+                val value = progress + min
+                render(value)
+                if (fromUser) {
+                    setter(value)
+                    editText.setText(value.toString())
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
             override fun onStopTrackingTouch(seekBar: SeekBar) {}
         })
+
+        setButton.setOnClickListener {
+            val entered = editText.text.toString().toLongOrNull()
+            if (entered != null) {
+                val bounded = entered.coerceIn(min, max)
+                setter(bounded)
+                seekBar.progress = (bounded - min).toInt()
+                render(bounded)
+                editText.setText(bounded.toString())
+            } else {
+                statusText.text = "Enter a number"
+            }
+        }
+    }
+
+    /** Same pattern as wireLongSetting, for a Float-valued setting (e.g. a multiplier). */
+    private fun wireFloatSetting(
+        editText: EditText, setButton: Button, seekBar: SeekBar, label: TextView,
+        labelPrefix: String, labelSuffix: String, min: Float, max: Float, stepsPerUnit: Int,
+        getter: () -> Float, setter: (Float) -> Unit
+    ) {
+        fun render(value: Float) {
+            label.text = "$labelPrefix${"%.1f".format(value)}$labelSuffix"
+        }
+
+        seekBar.max = ((max - min) * stepsPerUnit).toInt()
+        val initial = getter()
+        seekBar.progress = ((initial - min) * stepsPerUnit).toInt()
+        render(initial)
+        editText.setText("%.1f".format(initial))
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                val value = min + progress / stepsPerUnit.toFloat()
+                render(value)
+                if (fromUser) {
+                    setter(value)
+                    editText.setText("%.1f".format(value))
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
+
+        setButton.setOnClickListener {
+            val entered = editText.text.toString().toFloatOrNull()
+            if (entered != null) {
+                val bounded = entered.coerceIn(min, max)
+                setter(bounded)
+                seekBar.progress = ((bounded - min) * stepsPerUnit).toInt()
+                render(bounded)
+                editText.setText("%.1f".format(bounded))
+            } else {
+                statusText.text = "Enter a number"
+            }
+        }
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
