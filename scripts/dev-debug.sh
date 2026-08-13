@@ -48,7 +48,7 @@ wait_device() {
 }
 
 cmd_connect() {
-  local target="${1:-192.168.1.123:37561}"
+  local target="${1:-192.168.1.123:39833}"
   echo "==> Connecting ADB to $target..."
   "$ADB" connect "$target"
   wait_device
