@@ -19,7 +19,7 @@
         android:layout_height="wrap_content"
         android:text="1.0 Alpha — Aoharu Hai / Unity Cup only"
         android:textSize="14sp"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="16dp" />
 
     <TextView
         android:id="@+id/statusText"
@@ -27,7 +27,7 @@
         android:layout_height="wrap_content"
         android:text="@string/status_ready"
         android:textSize="16sp"
-        android:layout_marginBottom="32dp" />
+        android:layout_marginBottom="16dp" />
 
     <androidx.appcompat.widget.SwitchCompat
         android:id="@+id/sweepSwitch"
@@ -35,7 +35,7 @@
         android:layout_height="wrap_content"
         android:text="@string/sweep_toggle"
         android:textSize="18sp"
-        android:layout_marginBottom="16dp" />
+        android:layout_marginBottom="8dp" />
 
     <androidx.appcompat.widget.SwitchCompat
         android:id="@+id/voiceSwitch"
@@ -43,7 +43,94 @@
         android:layout_height="wrap_content"
         android:text="@string/voice_toggle"
         android:textSize="18sp"
-        android:layout_marginBottom="32dp" />
+        android:layout_marginBottom="20dp" />
+
+    <Button
+        android:id="@+id/captureButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Capture &amp; Analyze (OCR)"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/sweepButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Run Training Sweep (explicit)"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/advanceButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Smart Advance (replay recorded choice or no-choice)"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/captureAndAdvanceButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Capture + Advance if no-choice"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/recordChoiceButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Record current screen as 'user advanced'"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/exitCareerButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Exit Career (Give Up / Save &amp; Exit)"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/scrollListButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Scroll List (when sweep armed)"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Last OCR + match (first 300 chars):"
+        android:textSize="12sp"
+        android:layout_marginTop="8dp" />
+
+    <TextView
+        android:id="@+id/lastOcrText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:background="#222222"
+        android:textColor="#AAAAAA"
+        android:padding="8dp"
+        android:minLines="3"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:id="@+id/lastMatchReason"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="10sp"
+        android:textColor="#888888"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:layout_marginBottom="2dp" />
+
+    <TextView
+        android:id="@+id/lastSignature"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="9sp"
+        android:textColor="#666666"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:layout_marginBottom="10dp" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -51,6 +138,6 @@
         android:text="Kill switches are always active.\nService only acts inside Umamusume."
         android:textSize="12sp"
         android:gravity="center"
-        android:layout_marginTop="16dp" />
+        android:layout_marginTop="8dp" />
 
 </LinearLayout>

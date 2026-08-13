@@ -1,0 +1,2189 @@
+## User
+
+open UMAssisted and continue the process of completion of requirements
+
+## Assistant
+
+I'll explore the UMAssisted project and pick up where requirements completion left off.
+
+## Tools
+
+- ListDir: .
+- Execute: ls -la /home/dev/UMAssisted && find /home/dev/UMAssisted -maxdepth 3 -type f \( -name "*.md" -o -name "*TODO*" -o -name "*REQUIRE*" -o -name "*AGENTS*" -o -name "*PLAN*" -o -name "*spec*" \) 2>/dev/null | head -50 (List project root and key docs)
+
+## Assistant
+
+Project is mostly requirements and a prior session log. Reading those next to see progress and remaining work.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1-200)
+- Execute: wc -l /home/dev/UMAssisted/REQUIREMENTS.md /home/dev/UMAssisted/session1.txt; tail -c 50000 /home/dev/UMAssisted/session1.txt | head -c 30000; echo "---"; rg -n "status|TODO|complete|done|in.?progress|remaining|next|Phase|PR " /home/dev/UMAssisted/REQUIREMENTS.md | head -80 (Inspect session log and requirements status)
+
+## Assistant
+
+Session left off on the blocking open-questions list. Checking the registry and remaining blockers.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (901-1247)
+- Execute: grep -n "OQ-\|BLOCKING\|OPEN\|RESOLVED\|SPIKED\|## 9\|§9\|blocking" /home/dev/UMAssisted/REQUIREMENTS.md | head -120; echo "===="; tail -n 200 /home/dev/UMAssisted/session1.txt (Find OQ status and session end state)
+
+## Assistant
+
+Session died mid-requirement. Checking what's already in the doc, then finishing the pending REQ items.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (481-760)
+- Search: REQ-V\d+|confirm|listen|repetition|start listening|stop listening|REQ-A1[0-9]|REQ-V1[0-9]
+- Execute: cd /home/dev/UMAssisted && git log --oneline -15 && git status && git show --stat HEAD (Check recent commits and working tree)
+
+## Assistant
+
+Uncommitted OQ-22 work is present; the two voice requirements from the interrupted session still need writing.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && git diff REQUIREMENTS.md | head -200 (Show uncommitted REQUIREMENTS.md diff)
+
+## Assistant
+
+Implementing the two interrupted voice requirements and fixing the stale OQ-27 note.
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+
+## Assistant
+
+Next: research OQ-2 (event corpus source/licensing) — a blocking item we can progress without a device.
+
+## Tools
+
+- WebSearch: Umamusume event database community datamine Global English Gametora UmaEvents license
+- WebSearch: UmaEvents umamusume github OR site event data license
+- WebSearch: gametora umamusume events API data source open source
+- WebSearch: umamusume global master.mdb extract single mode text event choices english
+- Search: UmaEvents|corpus|master\.mdb|GameTora|datamin|OQ-2|prior.art|UmatoMusume
+- WebFetch: https://github.com/Kisegami/Uma-Event-Helper
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (151-270)
+- Execute: grep -n "UmaEvents\|UmatoMusume\|master.mdb\|GameTora\|prior.art\|corpus source\|licensing\|OQ-2" /home/dev/UMAssisted/session1.txt | head -60 (Find prior art discussion in session log)
+- WebSearch: umamusume android master.mdb path text_data single_mode story event choice global
+- WebFetch: https://github.com/akarindt/UmatoMusume
+- Execute: grep -n "master.mdb\|umamusumedb\|Umaplay\|fuzzy\|resolution\|OQ-4\|matching robust" /home/dev/UMAssisted/session1.txt | head -40 (Find matching robustness discussion in session)
+
+## Assistant
+
+Resolving OQ-2 and OQ-4 into requirements, then updating the registry.
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && git diff --stat && grep -n "OQ-[0-9].*BLOCKING\|OQ-[0-9].*RESOLVED\|OQ-[0-9].*OPEN\|OQ-[0-9].*DEFERRED" REQUIREMENTS.md (Verify registry status summary and diff stats)
+
+## Assistant
+
+Committing the requirements progress in the same workflow as the prior session.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && git add REQUIREMENTS.md && git commit -m "$(cat <<'EOF'
+Add REQ-V12/V13, resolve OQ-2/OQ-4 via corpus source and matching strategy
+
+Carry forward unfinished voice requirements from the interrupted session:
+- REQ-V12: repeating a consequential command counts as confirmation of
+  that command (extends REQ-V4; armed-window only; residual OQ-30 for
+  window duration/feedback).
+- REQ-V13: spoken start/stop listening toggles the same state as REQ-V9's
+  overlay, including asymmetric re-arm while "off" so zero-touch users
+  can unmute without touch.
+
+Finish the partial OQ-22 career-action enumeration (main hub / training
+sub-screen / events confirmed; Shop/Skills/Races/etc. still need screenshots).
+
+Resolve two architecture-blocking corpus questions without device time:
+- REQ-M5 / OQ-2: event-corpus text from a local Global master.mdb extract
+  bundled into the private APK — not redistributed third-party community
+  datasets. GameTora-class tools stay human labeling reference only.
+- REQ-M6 / OQ-4: OCR-assisted fuzzy text match primary, resolution-
+  normalized visual match secondary, confidence-gated fallthrough.
+  Residual calibration is OQ-31.
+
+Also fix the stale "OQ-27 still open" note under REQ-V2 and align REQ-F4's
+corpus-source wording with REQ-M5.
+EOF
+)" && git status && git log --oneline -5 (Commit requirements progress)
+- Execute: cd /home/dev/UMAssisted && git push origin master (Push requirements commit to origin)
+
+## Assistant
+
+Picked up the interrupted requirements session and advanced it. Commit `91a96f2` is on `origin/master`.
+
+### Recovered from the interrupted session
+- **OQ-22 partial enumeration** (was uncommitted): main hub, training sub-screen, and event dialogs marked confirmed; Shop / Skills / Races / Recreation / Infirmary / hamburger still need screenshots.
+- **REQ-V12** — repeating a consequential command counts as confirmation (extends REQ-V4; only inside the armed window). Residual: **OQ-30** (window duration / feedback).
+- **REQ-V13** — spoken **start listening** / **stop listening** toggle the same state as **REQ-V9**’s overlay, with re-arm still available while “off” so zero-touch users aren’t stuck.
+
+### Blocking list progressed without a device
+| OQ | Status | Resolution |
+|---|---|---|
+| **OQ-2** | **RESOLVED → REQ-M5** | Event text from local Global `master.mdb` extract (private APK only); community DBs = labeling reference, not redistributed source |
+| **OQ-4** | **RESOLVED → REQ-M6** | OCR fuzzy text match primary; resolution-normalized visual secondary; low confidence → fall through. Residual: **OQ-31** (thresholds/crops) |
+
+Also fixed the stale “OQ-27 still open” note under REQ-V2.
+
+### Still blocking architecture / beta
+1. **OQ-1** — does the client block `AccessibilityService` gestures? Needs the REQ-DEV3 user-triggered spike (device + you present).
+2. **OQ-22** (beta, not alpha) — remaining career screens need live screenshots before they can be enumerated rather than assumed.
+
+### Tractable next without device
+UX/design opens: OQ-11 (TTS on auto-replay), OQ-15/20 (config UI), OQ-23 (default voice phrases), OQ-28 (phrase-count limit), OQ-12 (validation process), OQ-14 (API floor above 30).
+
+**Need you/device for:** OQ-1 spike, or screenshots for Shop / Skills / Races / Recreation / Infirmary / hamburger to finish OQ-22.
+
+What do you want to take next?
+
+## User
+
+for the repetition of commands requirement, a synonym counts as a repetition
+
+## Assistant
+
+I'll tighten REQ-V12 so synonyms (same action's phrase set) explicitly count as confirmation.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (801-855)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Search: REQ-V12|same action command|any phrase from that action
+- Execute: cd /home/dev/UMAssisted && git add REQUIREMENTS.md && git commit -m "$(cat <<'EOF'
+Clarify REQ-V12: a synonym counts as command repetition for confirm
+
+Confirmation matches on action identity, not string equality — any phrase
+in the armed action's REQ-V11 set (e.g. "speed" then "select speed") is a
+valid confirm. Exact-string-only would undercut REQ-V11 at the moment the
+user is finishing a consequential action.
+EOF
+)" && git push origin master (Commit and push REQ-V12 synonym clarification)
+
+## Assistant
+
+Updated **REQ-V12**: confirmation is by **action identity**, not exact string match.
+
+Any phrase in that action’s **REQ-V11** set counts — e.g. `"speed"` then `"select speed"` confirms the same way as `"speed"` twice. Exact-phrase-only would fight REQ-V11 right when the user is finishing a consequential action.
+
+Pushed as `7d187a7`.
+
+## User
+
+add an open requirement to search for gaps in requirements and document them as open requirements to address
+
+## Assistant
+
+I'll add a meta-requirement for gap-finding, placed with the open-questions process rules.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1266-1315)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (2-16)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && git add REQUIREMENTS.md && git commit -m "$(cat <<'EOF'
+Add REQ-OQ3: search for requirement gaps and document them as open work
+
+Standing process requirement alongside REQ-OQ1/OQ2: actively look for
+holes in this document (missing behaviors, unstated decisions,
+cross-cutting constraints applied inconsistently, etc.) and write each
+gap into the doc as an OQ and/or REQ stub — not as chat TODOs or
+unspoken assumptions. Does not authorize silent 1.0 scope expansion.
+
+Residual OQ-32: formal full-document gap-pass cadence vs opportunistic
+discovery only. Status blurb updated to surface the rule.
+EOF
+)" && git push origin master (Commit and push REQ-OQ3)
+
+## Assistant
+
+Added **REQ-OQ3** in §9:
+
+- **Standing obligation**: search for gaps in this doc; write each one down as an **OQ** and/or **REQ stub** in the document itself — not chat notes or silent assumptions.
+- **What counts as a gap**: missing behaviors, undecided architecture dependencies, cross-cutting constraints applied inconsistently, gates without verification paths, unacknowledged interactions between REQs.
+- **Does not expand 1.0 scope** by inventing product features; out-of-scope finds stay deferred/out-of-scope.
+- **OQ-32** left open: formal full-document gap-pass cadence vs opportunistic discovery only.
+
+Status blurb at the top now points at REQ-OQ3. Pushed as `5588e18`.
+
+## User
+
+address open requirements
+
+## Assistant
+
+I'll inventory open/blocking items and resolve what we can without device time.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1296-1495)
+- Execute: grep -n "Open — OQ\|— OPEN\|— BLOCKING\|— DEFERRED\|— RESOLVED\|— OPEN," /home/dev/UMAssisted/REQUIREMENTS.md (List all OQ statuses and inline opens)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (101-120)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (301-550)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (701-800)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (901-1000)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1041-1140)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1181-1280)
+
+## Assistant
+
+Resolving tractable open items via design decisions consistent with existing principles, then documenting residual gaps.
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Search: OQ-30
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Search: REQ-V12|armed confirmation|OQ-30
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1486-1645)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+
+## Assistant
+
+Adding body stubs for the new gap OQs and cleaning stale inline pointers.
+
+## Tools
+
+- Search: Open — OQ-|Registry: OQ-|still open|not yet decided|not specified yet|Leaning
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1076-1115)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: grep -n "— OPEN\|— BLOCKING\|— RESOLVED\|— DEFERRED\|— OPEN," /home/dev/UMAssisted/REQUIREMENTS.md | tail -50; echo "===="; wc -l /home/dev/UMAssisted/REQUIREMENTS.md; grep -c "Open — OQ" /home/dev/UMAssisted/REQUIREMENTS.md (Verify final OQ status counts)
+- Execute: cd /home/dev/UMAssisted && git add REQUIREMENTS.md && git commit -m "$(cat <<'EOF'
+Resolve tractable open requirements; document residual gaps (REQ-OQ3)
+
+Design resolutions (no device required):
+- REQ-F5 / OQ-5: ship order training-sweep → no-choice advance → shop
+- REQ-M7 / OQ-3: maintainer offline re-extract for corpus currency
+- REQ-A7 / OQ-15: overlay kill-switches + settings for depth
+- REQ-A8 / OQ-20: global + per-event auto-replay (opt-in default off)
+- REQ-A9 / OQ-21: fixed ~1.5s user-configurable dwell
+- REQ-T5 / OQ-11: brief TTS on auto-replay, independently muteable
+- REQ-V14 / OQ-23: defaults-plus-override vocalizations
+- REQ-V11 / OQ-28: soft warn above 8 phrases, no hard cap
+- REQ-V12 / OQ-30: ~5s confirm window, cancel-on-expiry
+- REQ-V7 / OQ-22: pre-career outside beta hard gate
+- REQ-PL4 / OQ-14: API 30 floor
+- REQ-VAL4 / OQ-12: internal validation; outside precedent advisory
+- REQ-SF5 / OQ-16: multi-a11y coexistence rules
+- REQ-F4 / OQ-17: policy if hidden-state ambiguity (has-choice label)
+- REQ-QA1/3/5 / OQ-24–26: hybrid coverage, security checklist, human
+  update trigger
+- REQ-OQ3 / OQ-32: opportunistic + pre-milestone gap passes
+
+Still blocking / empirical: OQ-1 (gesture spike), OQ-22 residual
+screenshots, OQ-29/31/33 calibration.
+
+Gap stubs from this pass: REQ-S2/OQ-34 export format, REQ-SF6/OQ-35
+foreground-only, REQ-ON1/OQ-36 low-motor onboarding, OQ-37 battery budget.
+EOF
+)" && git push origin master && git log --oneline -3 (Commit and push open-requirements resolution)
+
+## Assistant
+
+Resolved every open item that could be decided from design principles alone. Pushed as `85973e6`.
+
+### Resolved this pass (→ new/updated REQs)
+
+| OQ | Decision |
+|---|---|
+| **OQ-3** | **REQ-M7** — maintainer offline `master.mdb` re-extract; never in-app updates |
+| **OQ-5** | **REQ-F5** — ship: training-sweep → no-choice advance → shop |
+| **OQ-11** | **REQ-T5** — brief TTS on auto-replay; independently muteable |
+| **OQ-12** | **REQ-VAL4** — internal review; outside precedent advisory only |
+| **OQ-14** | **REQ-PL4** — API **30** floor |
+| **OQ-15** | **REQ-A7** — overlay kill-switches **+** settings for depth |
+| **OQ-16** | **REQ-SF5** — no monopolize, SF3 on foreign a11y UI, no gesture wars |
+| **OQ-17** | Policy set: ambiguous visual class → **has-choice** (observation still open) |
+| **OQ-20** | Global **+** per-event auto-replay; new events **opt-in off** |
+| **OQ-21** | Fixed ~**1.5s** dwell, user-configurable |
+| **OQ-22** boundary | Pre-career **outside** beta hard gate |
+| **OQ-23** | **REQ-V14** — defaults-plus-override |
+| **OQ-24–26** | Hybrid coverage; security checklist + re-audit; human update trigger (**REQ-QA5**) |
+| **OQ-28** | Soft warn above **8** phrases; no hard cap |
+| **OQ-30** | ~**5s** confirm window; cancel-on-expiry |
+| **OQ-32** | Opportunistic always + full gap pass before alpha/beta/final |
+
+### Still open (need you / device / play)
+
+| Item | Why blocked |
+|---|---|
+| **OQ-1** | Gesture-detection spike (REQ-DEV3, you present) |
+| **OQ-22 residual** | Screenshots: Shop / Skills / Races / Recreation / Infirmary / hamburger |
+| **OQ-33** (bucket) | Empirical: A12 thresholds, M6 confidence/crops, dwell, confirm window, phrase-warn |
+
+### Gaps documented this pass (REQ-OQ3)
+
+- **REQ-S2 / OQ-34** — config export/import format  
+- **REQ-SF6 / OQ-35** — no game actions when not in foreground  
+- **REQ-ON1 / OQ-36** — low-motor first-run permissions  
+- **OQ-37** — battery/CPU envelope for always-listen + OCR  
+
+Architecture is largely unblocked. Next high-value steps: **OQ-1 spike** or **OQ-22 screenshots** if you have the device.
+
+## User
+
+Let's discuss rendering the requirements matrix into a graph display that can link to the requirements document i.e. REQUIREMENTS.md#etc
+
+## Assistant
+
+Exploring requirement structure and cross-links so we can discuss a graph that deep-links into `REQUIREMENTS.md`.
+
+## Tools
+
+- WebSearch: GitHub markdown heading anchor link auto-generated fragment id rules
+- Execute: cd /home/dev/UMAssisted && grep -oE '\*\*REQ-[A-Z0-9]+[0-9a-z]*\*\*|REQ-[A-Z]+[0-9]+|OQ-[0-9]+' REQUIREMENTS.md | sort | uniq -c | sort -rn | head -80; echo "===="; grep -nE '^\- \*\*REQ-|^## |^### ' REQUIREMENTS.md | head -100 (Inventory REQ IDs and section structure)
+
+## Assistant
+
+Good topic — the doc is large enough that a graph is useful, but deep-links need a small amount of structure work first.
+
+## What the matrix/graph would show
+
+Natural **nodes** (from current inventory, ~70+ `REQ-*` plus OQs):
+
+| Node type | Examples | Useful attributes |
+|---|---|---|
+| **Requirement** | `REQ-M3`, `REQ-V12` | family (M/V/A…), milestone, status |
+| **Open question** | `OQ-1`, `OQ-33` | BLOCKING / OPEN / RESOLVED / DEFERRED |
+| **Section** | `§5 Core Mechanism` | cluster container |
+| **Milestone** | alpha / beta / final / 2.0 | release gate |
+
+Natural **edges** (parseable from prose if you’re disciplined, or maintained lightly):
+
+| Edge | Meaning | Example |
+|---|---|---|
+| `depends_on` | A needs B | `REQ-T5 → REQ-A4` |
+| `resolves` | REQ closes OQ | `REQ-M5 → OQ-2` |
+| `extends` / `refines` | specialization | `REQ-V12 → REQ-V4` |
+| `gates` | release gate | `REQ-QA2 → 1.0 final` |
+| `cross_cuts` | global constraint | `REQ-S1 → REQ-V2, REQ-T2, …` |
+
+Hubs you already have by cross-reference count: **REQ-A4, REQ-M3, REQ-S1, REQ-F4, REQ-V5** — those become the graph’s “centers of gravity.”
+
+---
+
+## The hard part: `REQUIREMENTS.md#…` must actually land
+
+GitHub (and most Markdown renderers) only auto-anchor **headings**, not bold list items like:
+
+```markdown
+- **REQ-M3 — Screen understanding falls back…**
+```
+
+So today:
+
+- `REQUIREMENTS.md#5-core-mechanism` works  
+- `REQUIREMENTS.md#req-m3-…` does **not**
+
+### Fix options (pick one)
+
+**A. Explicit HTML anchors next to each REQ (recommended for this repo)**  
+```markdown
+- <a id="req-m3"></a>**REQ-M3 — Screen understanding…**
+```
+Stable, short, case-insensitive fragments: `#req-m3`, `#oq-1`.  
+Pros: works on GitHub, no renumbering pain. Cons: slight visual noise in source (or put anchors on their own line).
+
+**B. Promote each REQ to a heading**  
+```markdown
+#### REQ-M3 — Screen understanding…
+```
+Pros: free GitHub slugs. Cons: TOC becomes huge; slug changes if the title text changes unless you pin IDs.
+
+**C. Generated HTML page** with real `id`s, graph links to that HTML, Markdown stays source of truth.  
+Pros: best UX. Cons: second artifact to keep in sync (fine if CI-generated).
+
+**D. Line-number links** (`#L159`)  
+Fragile under every edit — skip for a living draft.
+
+**Recommendation:** **A** (or A+C). Stable `#req-m3` IDs match how you already talk about requirements, and graph nodes can hardcode `id = lower(REQ-id)`.
+
+---
+
+## How to render the graph
+
+Three tiers, increasing complexity:
+
+### 1. Static Mermaid / Graphviz in-repo (lightest)
+- Script parses `REQUIREMENTS.md` → emits `docs/requirements-graph.md` with Mermaid `flowchart` / `graph`.
+- Clickable nodes: Mermaid supports link syntax to `#req-m3`.
+- Pros: lives next to the public doc, no server, fits REQ-P3 (requirements repo only).  
+- Cons: dense graphs get unreadable; filtering is limited.
+
+### 2. Interactive HTML (best “matrix + graph” experience)
+- Build a single static page (e.g. **D3 force graph**, **Cytoscape.js**, **vis-network**, or **Observable**-style).
+- Left/side panel = **matrix** (filter by family, status, milestone).
+- Main canvas = **graph**; click node → opens `REQUIREMENTS.md#req-m3` (GitHub blob URL) or in-page panel with excerpt.
+- Generated from Markdown so the graph never drifts.
+
+Example node payload:
+```json
+{
+  "id": "REQ-M3",
+  "family": "M",
+  "title": "Screenshot-based recognition…",
+  "href": "https://github.com/brianreborn/UMAssisted/blob/master/REQUIREMENTS.md#req-m3",
+  "status": "active",
+  "section": "5"
+}
+```
+
+### 3. Matrix-first, graph secondary
+A **traceability matrix** table is often more useful day-to-day than a full force graph:
+
+| REQ | Depends on | Resolves | Gates | Status |
+|-----|------------|----------|-------|--------|
+| REQ-V12 | REQ-V4, REQ-V11 | OQ-30 | — | decided |
+| REQ-QA2 | REQ-A10, REQ-V9 | — | 1.0 final | open verify |
+
+Each cell is a link. Graph is a *view* of the same edge list, not a second source of truth.
+
+---
+
+## Architecture that fits this project
+
+```
+REQUIREMENTS.md  (canonical prose + stable #req-* anchors)
+       │
+       ▼ parse (script, CI or manual)
+  requirements-graph.json  (nodes + edges)
+       │
+       ├─► requirements-matrix.md   (tables, GitHub-readable)
+       ├─► requirements-graph.mmd   (Mermaid)
+       └─► requirements-graph.html  (optional interactive)
+```
+
+**Source of truth stays the Markdown** — same rule as REQ-OQ1. Graph/matrix are projections.
+
+**Edge authoring options:**
+
+1. **Inferred** — regex for `REQ-X`, `Resolves OQ-N`, `see REQ-Y` (works today, noisy).  
+2. **Structured front-matter per REQ** (cleaner long-term):
+   ```markdown
+   <!-- req id=M3 depends=M1,S1 resolves=OQ-2 gates= -->
+   - <a id="req-m3"></a>**REQ-M3 — …**
+   ```
+3. **Hybrid** — infer first, maintain only high-value edges (`depends_on`, `gates`) explicitly.
+
+For a living draft, **hybrid** is enough: infer cross-refs for “mentions,” curate `depends_on` / `gates` for the matrix that actually matters.
+
+---
+
+## Design choices worth deciding before building
+
+1. **Audience** — GitHub readers only, or local HTML for you? (Public requirements repo → static artifacts only; no app backend.)
+2. **Primary view** — force graph for exploration, or matrix for “what’s blocking what?”
+3. **OQs in the graph?** — yes for BLOCKING/OPEN; hide RESOLVED by default or fade them.
+4. **Cross-cutting nodes** (`REQ-S1`, `REQ-A5`, `REQ-A11`) — show as hubs, or as filters so they don’t spiderweb everything?
+5. **Anchor strategy** — commit to `#req-m3` / `#oq-1` now so links never churn.
+6. **Generation** — one Python/Node script checked in vs. manual Mermaid (manual dies quickly at 70+ nodes).
+
+---
+
+## Practical minimal path
+
+1. Add stable anchors: `#req-p1` … `#req-oq3`, `#oq-1` …  
+2. Emit `graph.json` from a parse of IDs + “Resolves OQ-*” + explicit `depends` comments.  
+3. Ship **matrix MD** first (usable on GitHub immediately).  
+4. Add **Mermaid** or a small **static HTML** graph second.
+
+---
+
+## Open product/process question
+
+Should the graph itself become a **requirement** (e.g. REQ-OQ4: “requirements graph/matrix is a generated view of this doc, kept in repo”)? That would fit REQ-OQ1/OQ3’s self-containment story — or stay tooling outside the SRS.
+
+---
+
+If you want to proceed, useful next forks:
+
+- **A)** Anchor convention only (prep the doc)  
+- **B)** Spec the matrix columns + edge types as a small REQ/tooling note  
+- **C)** Prototype a parser + Mermaid or HTML from current `REQUIREMENTS.md`
+
+Which of those matches what you had in mind — matrix-first, interactive graph, or both?
+
+## User
+
+maybe it should just be a tree? but I mean it should have arrows connecting things to show the graphness of it all
+
+## Assistant
+
+A **tree layout with graph edges** is a better fit than either a pure tree or a pure force graph.
+
+## The shape
+
+- **Tree (layout / nesting):** where a requirement *lives*  
+  `§5 Core Mechanism → REQ-M3 → bullets / residual OQs`
+- **Graph (arrows):** how requirements *relate*  
+  `REQ-T5 → depends on → REQ-A4`  
+  `REQ-M5 → resolves → OQ-2`  
+  `REQ-QA2 → gates → 1.0 final`
+
+So: **hierarchical placement + non-tree arrows**. Not “only parent/child,” and not a hairball of free-floating nodes.
+
+```
+§6.3 Voice
+├── REQ-V1
+│   └── REQ-V5  ──────────────┐
+│       └── REQ-V6            │  (extends / raises bar)
+├── REQ-V4 ◄──────────────────┼── REQ-V12  (confirmation form)
+│                             │
+└── REQ-V9 ◄── same state ────┘── REQ-V13
+         │
+         └── always-visible overlay ◄── REQ-A10  (cross-section arrow)
+```
+
+Parent lines = document structure.  
+Colored/dashed arrows = semantic graph.
+
+---
+
+## Why this works for UMAssisted
+
+| Pure tree | Pure force graph | Tree + arrows |
+|---|---|---|
+| Loses “REQ-V2 needs REQ-S1” | Loses § structure / reading order | Keeps both |
+| Cross-links become fake nesting | Hubs (A4, M3, S1) explode the layout | Cross-links stay as arrows |
+| Matches the MD outline | Feels exploratory but hard to scan | Outline = backbone; arrows = load-bearing |
+
+Your doc is **already a tree** (sections → REQs). The interesting part is the **graphness on top** — dependencies, resolves, gates, cross-cuts.
+
+---
+
+## Edge kinds (keep few)
+
+Too many arrow types = spaghetti. Start with 3–4:
+
+| Arrow | Style idea | Meaning |
+|---|---|---|
+| **depends on** | solid | must exist / hold for this to work |
+| **resolves** | solid, OQ → REQ or REQ → OQ | decision closed |
+| **extends / implements** | dashed | specialization of a parent rule |
+| **gates** | thick / milestone color | release blocker |
+
+Cross-cutting hubs (`REQ-S1`, `REQ-A5`, `REQ-A11`) should **not** get 40 spokes drawn always — filter them (“show S1 edges”) or draw them as a **side rail** the tree sits under, with optional highlight.
+
+---
+
+## Layout patterns that match “tree but arrows”
+
+1. **Indented outline + arc links** (side or over the tree)  
+   Classic “code map” / dependency-on-outline. Best for GitHub + simple HTML.
+
+2. **Tidy tree (Reingold–Tilford) + curved edges for non-parent links**  
+   What people expect from “org chart with extra arrows.” D3 `tree` + second edge layer.
+
+3. **Clustered sections as columns**  
+   Each § is a column; REQs stacked inside; arrows cross columns. Good for “architecture vs voice vs QA.”
+
+4. **Mermaid `flowchart` with subgraphs**  
+   ```text
+   subgraph Voice
+     V4 --> V12
+   end
+   S1 --> V2
+   ```
+   Subgraphs = tree clusters; `-->` = graph. Limited interactivity, fine as a first shippable view.
+
+Recommendation for a first real artifact: **(1) or (2)** — outline backbone you already know, arrows for the graphness.
+
+---
+
+## Interaction (still link into the doc)
+
+- Click **node** → `REQUIREMENTS.md#req-v12` (after stable anchors).
+- Click **arrow** → optional tooltip (“depends on: no network → on-device STT only”).
+- Toggle layers: `depends` / `resolves` / `gates` / “mentions only.”
+- Collapse tree branches (§6.3 closed) while keeping cross-arrows to visible nodes, or dim them.
+
+---
+
+## What *not* to do
+
+- **Fake tree by inventing a single parent for every REQ** — many things legitimately hang off several roots (S1, A11, VAL2). Forced unique parent lies.
+- **Draw every textual mention as an arrow** — `REQ-A4` would become unreadable. Curate: structure edges + high-value semantic edges; mentions stay in search/matrix.
+- **Replace the MD with the graph** — graph is a view; prose stays canonical (REQ-OQ1).
+
+---
+
+## Minimal conceptual model
+
+```text
+Node {
+  id: "REQ-V12"
+  parent: "§6.3" | "REQ-V4"   // tree placement only (one primary home)
+  href: ".../REQUIREMENTS.md#req-v12"
+}
+
+Edge {
+  from, to
+  kind: depends | resolves | extends | gates
+  // never used for layout of the tree spine
+}
+```
+
+**One primary home in the tree** (document section, or “extends X” when that’s the real home).  
+**Many arrows** for everything else.
+
+---
+
+## Practical first cut
+
+1. Tree = current heading hierarchy + each `REQ-*` / open `OQ-*` as a leaf under its section.  
+2. Arrows = only: `Resolves OQ-N`, explicit “see REQ-X” where X is load-bearing, milestone `gates`.  
+3. Stable `#req-v12` anchors so clicks leave the tree into the prose.  
+4. Default view: tree expanded to section level; arrows on for `depends` + `resolves`; `S1` cross-cuts off until toggled.
+
+That’s “just a tree” for navigation, with **arrows carrying the graphness** without turning the page into a physics simulation.
+
+If you want to push this into the repo next, natural sequence is: **anchor IDs → edge list (small JSON) → one HTML/Mermaid view with tree spine + arrows**. I can sketch the edge list from a few high-value hubs (S1, M3, A4, V4/V12) first so the shape is concrete before any tooling.
+
+## User
+
+that seems fine, I want to just use this to review requirements more easily it does not need perfection
+
+## Assistant
+
+Building a practical review map: tree by section, arrows for relationships, links to `REQUIREMENTS.md` line anchors. Good enough over perfect.
+
+## Tools
+
+- Execute: mkdir -p /home/dev/UMAssisted/tools && python3 - <<'PY'
+# quick probe: count REQs and sample structure
+import re
+from pathlib import Path
+text = Path('/home/dev/UMAssisted/REQUIREMENTS.md').read_text()
+req_heads = list(re.finditer(r'^- \*\*(REQ-[A-Z0-9]+)\s*[—–-]\s*(.+?)\*\*', text, re.M))
+print('REQ headers', len(req_heads))
+print('sample', [(m.group(1), m.group(2)[:50], text[:m.start()].count('\n')+1) for m in req_heads[:3]])
+oq = list(re.finditer(r'^- \*\*(OQ-\d+)\s*\(([^)]+)\)\s*—\s*([^*]+)\*\*', text, re.M))
+print('OQ registry', len(oq))
+print(oq[0].groups() if oq else None)
+PY (Probe REQ/OQ parse patterns)
+- Execute: which python python3 node 2>/dev/null; ls /usr/bin/python* 2>/dev/null; command -v python3.12 || command -v python3.11 || true (Find available Python/Node runtime)
+- Edit: /home/dev/UMAssisted/tools/gen_requirements_map.py
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py && wc -c requirements-map.html && head -c 200 requirements-map.html; echo; /usr/local/bin/python3.12 -c "
+import json,re
+from pathlib import Path
+# sanity: extract DATA blob size via re-run parse
+import importlib.util
+spec=importlib.util.spec_from_file_location('g','tools/gen_requirements_map.py')
+g=importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+s,e,n=g.parse(Path('REQUIREMENTS.md').read_text())
+print('sample edges', e[:8])
+print('sample nodes', [(x['id'], x['line']) for x in n[:5]])
+" (Generate requirements-map.html and sanity-check)
+
+## Assistant
+
+Parser only caught 26 REQs — fixing multi-line titles so the map is more complete.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 - <<'PY'
+import re
+from pathlib import Path
+text=Path('REQUIREMENTS.md').read_text()
+# all REQ- at list starts
+for m in re.finditer(r'^- \*\*(REQ-[A-Z0-9]+)', text, re.M):
+    line=text.count('\n',0,m.start())+1
+    snippet=text[m.start():m.start()+120].replace('\n',' ')
+    print(f'{line}: {snippet}')
+print('total', len(list(re.finditer(r'^- \*\*(REQ-[A-Z0-9]+)', text, re.M))))
+PY (List all REQ list headers for parser fix)
+- Edit: /home/dev/UMAssisted/tools/gen_requirements_map.py
+- Edit: /home/dev/UMAssisted/tools/gen_requirements_map.py
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py && /usr/local/bin/python3.12 - <<'PY'
+import importlib.util
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('g','tools/gen_requirements_map.py')
+g=importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+s,e,n=g.parse(Path('REQUIREMENTS.md').read_text())
+reqs=[x for x in n if x['kind']=='req']
+print('req count', len(reqs))
+print('missing check', set(f'REQ-{a}' for a in ['P1','P2','P3','V12','QA5','ON1','S1','M5']) - {x['id'] for x in reqs})
+# false edges from M1?
+print('M1 edges', [x for x in e if x['from']=='REQ-M1'])
+print('M5 edges', [x for x in e if x['from']=='REQ-M5'])
+PY
+chmod +x tools/gen_requirements_map.py
+# don't commit session1.txt; commit map + tool
+git add tools/gen_requirements_map.py requirements-map.html && git status && git commit -m "$(cat <<'EOF'
+Add good-enough requirements tree+graph map for review
+
+Static HTML (requirements-map.html) generated from REQUIREMENTS.md:
+section tree on the left, dagre layout with relationship arrows in the
+center, detail + GitHub line links on the right. Edges are inferred
+from resolves/see/extends/per/about patterns only — not every mention.
+
+Regenerate with: python3.12 tools/gen_requirements_map.py
+Good enough for browsing relationships; not a formal traceability tool.
+EOF
+)" && git push origin master && git log --oneline -2 (Regenerate map, commit and push)
+- Execute: rm -rf /home/dev/UMAssisted/tools/__pycache__ (Remove accidental pycache)
+
+## Assistant
+
+Built a **good-enough** review map — tree spine + arrows, not a formal traceability system.
+
+### How to use
+Open locally (needs network once for Cytoscape CDN):
+
+```bash
+# from repo root
+xdg-open requirements-map.html
+# or point a browser at:
+# /home/dev/UMAssisted/requirements-map.html
+```
+
+Also on GitHub after pull: `requirements-map.html` (raw HTML download/open).
+
+### What’s on the page
+| Pane | Role |
+|---|---|
+| **Left** | Tree by doc section → every `REQ-*` / `OQ-*` |
+| **Center** | Hierarchical layout + **arrows** (resolves / see / extends / about…) |
+| **Right** | Title, snippet, outgoing/incoming links, **Open in REQUIREMENTS.md (line #)** |
+
+Toggles: edge kinds, hide resolved OQs, filter by section/text.
+
+### Numbers (current regenerate)
+- **77 REQ + 37 OQ** nodes  
+- **~90** inferred edges (not every textual mention)
+
+### Regenerate after doc edits
+```bash
+python3.12 tools/gen_requirements_map.py
+```
+
+Links use GitHub `#L123` line anchors (good enough; drift when the doc shifts until you regenerate).
+
+Pushed as `350a42a`. If you want denser arrows later we can loosen the edge heuristics; if noisier, tighten them.
+
+## User
+
+all of this top-level documentation also is open source
+
+## Assistant
+
+Updating REQ-P3 so the open-source exception covers all top-level documentation, not only `REQUIREMENTS.md`.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (59-103)
+- Read: /home/dev/UMAssisted/LICENSE (1-32)
+- Search: this document|this file|requirements document|REQ-P3|public.*repo|closed source|deliberate exception
+- Search: public|closed|REQ-P3|exception|documentation
+- Read: /home/dev/UMAssisted/tools/gen_requirements_map.py (1-15)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py && git add REQUIREMENTS.md requirements-map.html && git commit -m "$(cat <<'EOF'
+REQ-P3: all top-level documentation is open source, not only REQUIREMENTS.md
+
+Clarify the closed-source rule: implementation and APK stay private;
+design/process docs in this public repo (requirements, review map, doc
+tooling, license, etc.) are the open-source surface. Regenerated
+requirements-map.html so the map title text matches.
+EOF
+)" && git push origin master && git log --oneline -1 (Update REQ-P3, regenerate map, commit, push)
+
+## Assistant
+
+Updated **REQ-P3** (and **OQ-13**’s registry answer).
+
+**Open source (this public repo):** top-level design/process docs — `REQUIREMENTS.md`, `requirements-map.html`, doc tooling under `tools/`, `LICENSE`, and similar project-level docs.
+
+**Closed / private:** app source, build pipeline for the APK, bundled corpora/assets, and the APK itself — in a **separate private repo**, never this one.
+
+Pushed as `5700d8e`. Map regenerated so the REQ-P3 node text matches.
+
+## User
+
+as soon as we begin building the application, that is closed source
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py && git add REQUIREMENTS.md requirements-map.html && git commit -m "$(cat <<'EOF'
+REQ-P3: closed source as soon as application building begins
+
+No public spike or skeleton phase for app code — private implementation
+repo from the first application commit; docs may stay public.
+EOF
+)" && git push origin master (Commit and push REQ-P3 build-start trigger)
+
+## Assistant
+
+Recorded under **REQ-P3**:
+
+- Closed source starts **when application building starts** — scaffold, first service stub, build files, anything that *is* the app.
+- **No** public early spike or skeleton phase for app code.
+- Private implementation repo from the **first application commit**; this public repo stays docs-only.
+
+Pushed as `ae8fbb9`.
+
+## User
+
+I still need to be able to view the rendered html but now on the github it just shows the code or the raw html uninterpreted
+
+## Assistant
+
+GitHub's file viewer won't render HTML. Setting up GitHub Pages so the map is viewable as a live page, and adding a clear link from the docs.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && gh auth status 2>&1; ls -la .github 2>/dev/null; head -5 REQUIREMENTS.md (Check gh auth and repo layout)
+- Execute: cd /home/dev/UMAssisted && gh api repos/brianreborn/UMAssisted/pages 2>&1 || true (Check if GitHub Pages already configured)
+- Read: /home/dev/UMAssisted/tools/gen_requirements_map.py (2-31)
+- Search: ^OUT = |write_text|relative_to
+- Edit: /home/dev/UMAssisted/tools/gen_requirements_map.py
+- Edit: /home/dev/UMAssisted/tools/gen_requirements_map.py
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py && ls -la docs/ && \
+# Enable GitHub Pages from /docs on master (legacy source)
+gh api repos/brianreborn/UMAssisted/pages -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -f build_type=legacy \
+  -f 'source[branch]=master' \
+  -f 'source[path]=/docs' 2>&1 || \
+gh api repos/brianreborn/UMAssisted/pages -X PUT \
+  -H "Accept: application/vnd.github+json" \
+  -f build_type=legacy \
+  -f 'source[branch]=master' \
+  -f 'source[path]=/docs' 2>&1
+ (Generate docs/ site and enable GitHub Pages)
+- Execute: cd /home/dev/UMAssisted && git add REQUIREMENTS.md tools/gen_requirements_map.py docs/ requirements-map.html && git status && git commit -m "$(cat <<'EOF'
+Serve requirements map via GitHub Pages (docs/)
+
+GitHub's blob viewer only shows HTML source. Publish the map under docs/
+as the Pages site so it renders at brianreborn.github.io/UMAssisted/.
+Generator writes docs/index.html, docs/requirements-map.html, and a root
+copy; REQUIREMENTS.md links to the live site.
+EOF
+)" && git push origin master && sleep 3 && gh api repos/brianreborn/UMAssisted/pages 2>&1 | head -c 800; echo; gh api repos/brianreborn/UMAssisted/pages/builds --jq '.[0] | {status, created_at, error}' 2>&1 || true (Commit docs site, push, check Pages build)
+
+## Assistant
+
+GitHub’s file browser only shows HTML source — it never runs the page. The map is now on **GitHub Pages** so it actually renders.
+
+### Open the interactive map
+**https://brianreborn.github.io/UMAssisted/**  
+(also `…/requirements-map.html`)
+
+Site status: **built**, HTTP 200.
+
+### What changed
+- Map lives under `docs/` (Pages source: `master` → `/docs`)
+- `docs/index.html` is the site home
+- Link added at the top of `REQUIREMENTS.md`
+- Generator writes `docs/` + root copy for local use
+
+### After you edit requirements
+```bash
+python3.12 tools/gen_requirements_map.py
+git add docs/ requirements-map.html && git commit && git push
+```
+Pages rebuilds from `docs/` on push (usually under a minute).
+
+Don’t use the raw file view on GitHub for browsing the graph — use the Pages URL above.
+
+## User
+
+Make sure REQUIREMENTS.md includes a copy of LICENSE as well so that it indicates the requirements are the thing under the license.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/LICENSE
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (2-26)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1691-1730)
+- Execute: tail -5 /home/dev/UMAssisted/REQUIREMENTS.md | od -c | head -5; wc -l /home/dev/UMAssisted/REQUIREMENTS.md; tail -3 /home/dev/UMAssisted/REQUIREMENTS.md (Check end of REQUIREMENTS.md)
+- Execute: cd /home/dev/UMAssisted && cat >> REQUIREMENTS.md << 'EOF'
+
+## 10. License
+
+**This requirements document — and the other top-level open-source
+documentation in this repository (see REQ-P3) — is distributed under the
+license below.** The private application implementation and APK are *not*
+licensed by this text; they are not published here.
+
+The same terms also appear in the repository root `LICENSE` file. That
+file and this section are intended to stay identical for the license
+body; if they ever diverge, treat this copy as the terms that apply to
+**this document** specifically.
+
+```
+Copyright (c) 2026, Brian Fundakowski Feldman
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in
+   the documentation and/or other materials provided with the
+   distribution.
+3. All advertising materials mentioning features or use of this
+   software must display the following acknowledgement:
+   This product includes software developed by Brian Fundakowski Feldman.
+4. Neither the name of Brian Fundakowski Feldman nor the names of its
+   contributors may be used to endorse or promote products derived
+   from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY BRIAN FUNDAKOWSKI FELDMAN ''AS IS'' AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL BRIAN FUNDAKOWSKI FELDMAN BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+```
+EOF
+# light cross-ref from REQ-P3
+python3.12 - <<'PY'
+from pathlib import Path
+p = Path('REQUIREMENTS.md')
+t = p.read_text()
+old = """  - **What counts as open-source top-level documentation (this repo):**
+    this requirements document (`REQUIREMENTS.md`); derived review
+    artifacts and the tooling that generates them from it (e.g.
+    `requirements-map.html`, `tools/gen_requirements_map.py`); license
+    text; and any other **project-level design/process docs** kept here so
+    the design can be read across systems and worked through openly. If it
+    documents *what UMAssisted is supposed to be* rather than *how the
+    private app is implemented*, it belongs here and is public."""
+new = """  - **What counts as open-source top-level documentation (this repo):**
+    this requirements document (`REQUIREMENTS.md`); derived review
+    artifacts and the tooling that generates them from it (e.g.
+    `requirements-map.html`, `tools/gen_requirements_map.py`); license
+    text; and any other **project-level design/process docs** kept here so
+    the design can be read across systems and worked through openly. If it
+    documents *what UMAssisted is supposed to be* rather than *how the
+    private app is implemented*, it belongs here and is public. The
+    license terms that apply to this requirements document are reproduced
+    in full in §10 so the document is self-contained as a licensed work
+    (same body as the root `LICENSE` file)."""
+if old not in t:
+    raise SystemExit('REQ-P3 block not found for cross-ref')
+p.write_text(t.replace(old, new, 1))
+print('cross-ref ok')
+PY
+python3.12 tools/gen_requirements_map.py >/dev/null
+git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Include full LICENSE text in REQUIREMENTS.md (§10)
+
+Make the requirements document self-contained as a licensed work: §10
+states that this doc (and other top-level open docs per REQ-P3) is under
+the reproduced 4-clause BSD terms, and that the private app is not.
+Cross-reference from REQ-P3; root LICENSE file remains the repo copy.
+EOF
+)" && git push origin master && git log --oneline -1 && tail -n 20 REQUIREMENTS.md | head -20
+ (Add §10 license copy, cross-ref, commit, push)
+
+## Assistant
+
+Added **§10. License** to `REQUIREMENTS.md` with:
+
+- Explicit statement that **this requirements document** (and other top-level open docs per REQ-P3) is under those terms  
+- Full copy of the root `LICENSE` body  
+- Note that the private app/APK is **not** covered by this text  
+- Pointer that the section and root `LICENSE` should stay aligned  
+
+REQ-P3 also cross-references §10. Pushed as `8b825c0`.
+
+## User
+
+add a "but don't save that" customizable clause to event selections so that we can avoid recording a precedent for an enabled auto-selection behavior that could then occur in the future
+
+## Assistant
+
+Adding a "don't save this selection" option so one-off choices don't become auto-replay precedents.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (476-595)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-A13: don't-save clause for event selections (no auto-replay precedent)
+
+Allow executing a decision-point pick for this occurrence only without
+writing or updating the standing (support card, event) recording, so a
+situational choice cannot later fire under REQ-A8 auto-replay. Prior
+stores stay untouched; customizable default save-vs-remember-only;
+available on voice and mediated confirm surfaces.
+EOF
+)" && git push origin master && git log --oneline -1 (Regenerate map, commit and push REQ-A13)
+
+## Assistant
+
+Added **REQ-A13** — **"Don't save that"** for event selections.
+
+### Behavior
+- User still picks the in-game option for **this** occurrence.
+- UMAssisted **does not** store it as the standing `(support card, event)` answer (and **does not** overwrite an existing one).
+- So that pick **cannot** become a future **REQ-A8** auto-replay precedent.
+
+### Details
+| Case | Effect |
+|---|---|
+| No prior recording | Key stays empty; later still falls through |
+| Prior recording exists | Prior answer unchanged; auto-replay still uses the old one |
+| Surfaces | Voice (compound phrases) + any mediated confirm UI; optional sticky “next: don’t save” |
+| Default preference | Fresh install: **save by default**; user can switch to **remember only when asked**; explicit don’t-save/do-save wins per pick |
+
+Cross-linked from **REQ-A4**, **REQ-A8**, and **REQ-A7** settings. Pushed as `f4836ad`.
+
+## User
+
+add "gamble" as an option for events where one selection has multiple possible outcomes and the other has just one. likewise, add "safe" for events where there is one single non-gamble option.
+
+## Assistant
+
+Adding semantic "gamble" / "safe" selection commands for multi-outcome vs single-outcome event options.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (506-555)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (681-730)
+- Search: option|choice|event dialog|REQ-V7|speaking the chosen
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-A14: gamble/safe semantic commands for branched event options
+
+User can say "gamble" (multi-outcome option) or "safe" (sole single-outcome
+non-gamble option) at corpus-matched events. Tags are offline from event
+data, not live judgment; ambiguous layouts fall through. Composable with
+don't-save (A13); recordings store concrete option id. Residual OQ-38 for
+exotic multi-option labeling edges.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push REQ-A14 gamble/safe)
+
+## Assistant
+
+Added **REQ-A14**.
+
+### Commands
+| Phrase (defaults; customizable) | Selects |
+|---|---|
+| **gamble** | The one option tagged **multi-outcome** |
+| **safe** | The one option tagged **single-outcome**, when another option is multi-outcome |
+
+### Rules
+- Tags come from **offline corpus** (event data + review), not live “what looks riskier.”
+- **Exactly one** matching option → select it; otherwise **fall through** and say so (no guessing).
+- Works with **don’t save** (`gamble, don't save`, etc.).
+- If saved for auto-replay, stores the **concrete option**, not the word “gamble.”
+- Still **user-originated** — never auto-picks safe/gamble on its own (REQ-A11).
+
+**OQ-38** left open for exotic layouts (3+ options, dual gambles, etc.). Pushed as `5254e2a`.
+
+## User
+
+when selecting an option, allow various forms: "first option"/"1" is a main form. another main form is to read out the option itself as seen on screen, the most natural way of indicating a selection.
+
+## Assistant
+
+Adding explicit selection forms for event options: ordinal/index and on-screen option text.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (881-930)
+- Search: speaking the chosen|option text|REQ-V8|REQ-V11|event dialog
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-V15: event option selection forms (ordinal + on-screen text)
+
+Main forms when picking a choice: (1) ordinal/index — "first option",
+"1", etc.; (2) speaking the option text as shown on screen (most natural
+content form), fuzzy-matched to corpus strings. Plus A14 gamble/safe and
+V8 custom phrases. Ties TTS readout to the same wording. Residual OQ-39
+for fuzzy-match depth / OCR secondary signal.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push REQ-V15 option selection forms)
+
+## Assistant
+
+Added **REQ-V15** — multiple ways to name an event option; two are **main forms**.
+
+### Main forms
+| Form | Examples | Notes |
+|---|---|---|
+| **Ordinal / index** | "first option", "option 1", **"1"**, "second option" | 1-based; matches list order / TTS numbering |
+| **On-screen text** | Say the **option wording as shown** | Most natural; fuzzy-match to corpus strings for this event |
+
+### Also still valid
+- **gamble** / **safe** (REQ-A14)
+- Custom phrases (REQ-V8/V11)
+
+All forms resolve to the same concrete option for execute / save / don’t-save / auto-replay. TTS (REQ-T1) should number options and speak the same text you can repeat back.
+
+**OQ-39**: how much of a long string must be spoken, and OCR as a secondary signal — left open. Pushed as `c2319a3`.
+
+## User
+
+I don't know about this "don't save" thing. "gamble" is the accurate term
+
+## Assistant
+
+Pulling back the "don't save" requirement and locking "gamble" as the canonical term.
+
+## Tools
+
+- Search: don't save|dont save|REQ-A13|Don't save|A13
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (726-845)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Search: don't save|A13|dont-save|Don't save|one-shot
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Withdraw REQ-A13 don't-save; lock "gamble" as the accurate A14 term
+
+Don't-save / one-shot-without-precedent is out of scope — A8 opt-in already
+covers unwanted auto-replay. REQ-A13 id retired. REQ-A14: user-facing and
+corpus tags use gamble/safe (not multi-outcome euphemisms); shipped default
+phrase is exactly "gamble".
+EOF
+)" && git push origin master && git log --oneline -1 (Commit withdraw A13 and gamble terminology)
+
+## Assistant
+
+Done.
+
+### "Don't save" (REQ-A13)
+**Withdrawn** — not in scope. Auto-replay risk is already handled by **REQ-A8** (opt-in per event; new recordings don’t fire until enabled). Standing answers stay editable under **REQ-A4**. The ID is retired so it isn’t reused.
+
+### "Gamble" (REQ-A14)
+Locked as the **accurate / canonical** term:
+- User-facing defaults and TTS say **gamble** (not “risk” / “rng” as the primary name)
+- Corpus tags are `gamble` / `safe` / `unclassified`
+- Personal synonyms still allowed via REQ-V11 if someone wants them
+
+Pushed as `b806717`.
+
+## User
+
+another kind of selection is "take the energy" where one option will guarantee resulting in gaining the most energy or losing the least energy. It may require pushing "Effects" (which could be automated because that's accessibility) to then view the Choices dialog which maps the named options to the resultant outcomes.
+
+## Assistant
+
+Adding a "take the energy" selection form and accessibility automation for the Effects → Choices path.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (716-815)
+- Search: REQ-A14|gamble|REQ-V15|Effects
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-A15: take-the-energy selection + Effects UI as accessibility
+
+Semantic command picks the option with the best guaranteed energy delta
+(most gain / least loss). Offline corpus preferred; may open Effects →
+Choices to map options to outcomes. Automating Effects is info-access
+assist (A15a), not auto-picking an option. Residual OQ-40 for UI/data
+edges.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push REQ-A15 take the energy)
+
+## Assistant
+
+Added **REQ-A15**.
+
+### "take the energy"
+- Picks the option with the **best guaranteed energy** (most gain, or least loss).
+- **Gamble** options: only the **certain** energy counts, not the lucky branch.
+- Ties / no data → fall through, don’t guess.
+- User stated the criterion (energy only) — not a general “pick the best” bot (**REQ-A11**).
+
+### Effects → Choices (**REQ-A15a**)
+- Automating **Effects** (and reading the **Choices** outcome map) is **accessibility** — revealing info, like TTS.
+- May open Effects, wait for the map, read outcomes, dismiss if needed.
+- Still **does not** select an option unless the user says so (including “take the energy”) or auto-replay is enabled.
+
+### Data
+1. Offline corpus energy fields when available  
+2. Else live Effects UI path  
+
+**OQ-40**: exact Global Effects UI / where energy lives in data. Pushed as `db3bd4d`.
+
+## User
+
+when selecting a race, such as by indicating with the vocal command "race" or "just race", we get the race selection screen. allow various forms of input here, including reading out the name of the race listed, saying "Default" or "first" or similar, and ... am I forgetting something obvious?
+
+## Assistant
+
+Drafting race-selection input forms (parallel to event options) and noting likely missing pieces: goal/recommended race, list scroll, and confirm.
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1116-1205)
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (931-970)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-V16: race open + multi-form race list selection
+
+Open with race/just race; pick via race name, ordinal/first, default
+focus, goal/recommended, or custom phrases. Also list TTS, scroll,
+confirm-enter (V4), back. Notes easy-to-miss goal race form. Residual
+OQ-41 for Global chrome screenshots.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push REQ-V16 race selection)
+
+## Assistant
+
+Added **REQ-V16**. You weren’t missing much — a few things that are easy to skip once you’re thinking about names/ordinals:
+
+### Forms you named (in the req)
+| Form | Examples |
+|---|---|
+| Open list | **"race"**, **"just race"** (open only — no auto-enter) |
+| Race name | Speak the listed name (main content form) |
+| Ordinal | **"first"**, **"1"**, second, … |
+| Default | **"default"** → pre-highlighted / focused row |
+
+### Easy to forget (also in the req)
+1. **Goal / recommended race** — "goal race", "recommended", "objective" (often what you mean in a career; may match default, but speech differs).
+2. **List TTS + scroll** — long lists need readout and next/previous/more before a pick.
+3. **Select vs enter** — choosing a row ≠ committing; **enter/confirm** is separate and under **REQ-V4**.
+4. **Back/cancel** without racing.
+5. **Custom phrases** (same as everywhere else).
+
+### Explicitly *not* forgotten on purpose
+- Pre-race strategy / in-race / results still under **OQ-22** / **OQ-41** (need screenshots).
+
+**"just race"** = same open action as **"race"**, not a different policy.
+
+Pushed as `1669c0f`. If you want grade (G1/OP) or distance as another form later, that’s a small add on top of this.
+
+## User
+
+we should accept something like "just race the scheduled race" to indicate the user wishes to make more accessible the multiple presses required to select race then select the highlighted default scheduled race then hit the button to begin the race
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-V16: compound command to race the scheduled/default race
+
+Accept "just race the scheduled race" (and kin) as one user command that
+opens Races, selects the highlighted scheduled/default row, and presses
+begin — multi-press consolidation for accessibility. Bare "race" remains
+open-only; V4 confirm still applies; no standing loop.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push scheduled-race compound command)
+
+## Assistant
+
+Updated **REQ-V16** with two command depths:
+
+### Open only
+- **"race"** / bare **"just race"** → open the race list (browse/pick yourself)
+
+### Full sequence (multi-press → one command)
+Examples: **"just race the scheduled race"**, **"race the scheduled race"**, **"race the default"**
+
+Runs, as one user command:
+1. Open Races  
+2. Select the **highlighted scheduled/default** row  
+3. Press **begin/enter** race  
+
+Same idea as REQ-F1 named sequences: fewer precise taps, still **one deliberate utterance**, no auto-loop (REQ-A5).
+
+### Guards
+- Can’t identify scheduled row → **abort**, don’t guess  
+- Entering still under **REQ-V4** (name the race, confirm path)  
+- Stepwise **"race" → pick → enter"** still works  
+
+Pushed as `9e0def0`.
+
+## User
+
+Yes, if there is unambiguously a single G1, G2 or G3 then allow that as an option for an utterance to indicate that visible option
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-V16: allow G1/G2/G3 when exactly one such race is offered
+
+Unambiguous graded-class utterance selects that list row; zero or multiple
+matches fall through. Does not by itself press begin/enter.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push G1/G2/G3 race selection form)
+
+## Assistant
+
+Added to **REQ-V16** as form 5:
+
+- **"G1" / "G2" / "G3"** (and variants like "grade one") select that race **only if exactly one** race of that grade is in the current offer set.
+- **0 or 2+** → fall through, say why (no guessing).
+- Selects the **row only**; begin/enter still needs confirm (or a full scheduled-race compound).
+
+Pushed as `84201f8`.
+
+## User
+
+Let's add to the swipe toggle also controlling behavior where the display of a long list is automatically scrolled for the user, such as a long list of races
+
+## Assistant
+
+Extending the sweep/overlay toggle to cover auto-scrolling long lists (e.g. race lists).
+
+## Tools
+
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (556-645)
+- Search: REQ-A9|REQ-A10|auto-sweep|sweep|scroll
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-A16: sweep toggle also arms long-list auto-scroll (e.g. races)
+
+One always-visible sweep control enables training facility auto-sweep and
+paced one-pass auto-scroll of long lists (race list first). Does not
+select items; stops at end; yields to user scroll/pick; off kills both.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push list auto-scroll under sweep toggle)
+
+## Assistant
+
+Added **REQ-A16** and widened **REQ-A10**.
+
+### One sweep toggle (always-visible slider)
+When **on**:
+- **REQ-A9** — training facility auto-sweep  
+- **REQ-A16** — **auto-scroll long lists** (race list first; also shop/skills when those screens are known)
+
+When **off** — both stop.
+
+### Auto-scroll rules
+- Reading pace (not a blur); shares A9’s comprehension-first idea  
+- **One pass**, then stop (**REQ-A5** — no infinite loop)  
+- **Scroll only** — never selects/enters a race  
+- Yields if the user scrolls or picks mid-pass  
+- Only on recognized list screens  
+
+Cross-linked from race flow (**REQ-V16**). Pushed as `68f4e6c`.
+
+## User
+
+likewise if the user utters something like "G1 G1" then that should indicate both selecting it and then hitting the button to start the race scene
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-V16: G1 G1 (repeated grade) selects unique grade race and begins
+
+Single grade utterance selects only; double (V12-style) also presses
+begin/enter. Same for G2/G3 when unambiguous; feedback names the race.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push double-grade race begin)
+
+## Assistant
+
+Updated **REQ-V16**:
+
+| Utterance | Effect |
+|---|---|
+| **"G1"** (once) | Select the unique G1 only |
+| **"G1 G1"** (repeat) | Select that G1 **and** press begin/enter |
+
+Same for **G2** / **G3** when unambiguous. Uses the **REQ-V12** “say it again to confirm” pattern (synonyms like "G1" → "grade one" count). Still names the race on commit (**REQ-V4**). Ambiguous grade → neither fires.
+
+Double-begin for default/name is encouraged for consistency; **grade double is required**.
+
+Pushed as `7d6b3ce`.
+
+## User
+
+Check requirements for golden opportunities to refactor them.
+
+## Assistant
+
+Reviewing the requirements doc for high-value refactor opportunities.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 <<'PY'
+import re
+from pathlib import Path
+from collections import defaultdict, Counter
+text = Path('REQUIREMENTS.md').read_text()
+lines = text.splitlines()
+print('lines', len(lines), 'chars', len(text))
+
+# REQ headers
+req_re = re.compile(r'^- \*\*(REQ-[A-Z][A-Z0-9]*)\s*[—–-]\s*(.+?)\*\*', re.M|re.S)
+reqs = []
+for m in req_re.finditer(text):
+    rid = m.group(1)
+    title = re.sub(r'\s+',' ', m.group(2))[:80]
+    line = text.count('\n',0,m.start())+1
+    reqs.append((rid, line, title))
+
+print('\n=== REQ count by family ===')
+fam = Counter(re.match(r'REQ-([A-Z]+)', r[0]).group(1) for r in reqs)
+for f,c in sorted(fam.items()):
+    print(f, c)
+
+print('\n=== Duplicate REQ ids ===')
+c = Counter(r[0] for r in reqs)
+print([k for k,v in c.items() if v>1] or 'none')
+
+print('\n=== Numeric order issues (family) ===')
+by_f = defaultdict(list)
+for rid, line, title in reqs:
+    m = re.match(r'REQ-([A-Z]+)(\d+)', rid)
+    if m:
+        by_f[m.group(1)].append((int(m.group(2)), rid, line, title))
+for f, items in sorted(by_f.items()):
+    nums = [i[0] for i in items]
+    if nums != sorted(nums):
+        print(f, 'OUT OF ORDER in doc:', [i[1] for i in items])
+    # gaps
+    if nums:
+        missing = [n for n in range(min(nums), max(nums)+1) if n not in nums]
+        if missing:
+            print(f, 'gaps:', missing, 'have:', sorted(nums))
+
+print('\n=== WITHDRAWN / DEFERRED / stub ===')
+for pat in ['WITHDRAWN', 'DEFERRED', 'Stub', 'stub', 'Tentative', 'soft, conditional']:
+    for i,l in enumerate(lines,1):
+        if pat in l and ('REQ-' in l or '###' in l or 'Open' in l):
+            if i < 1800:
+                print(f'{i}: {l[:100]}')
+
+print('\n=== Cross-ref density top ===')
+all_ids = re.findall(r'REQ-[A-Z][A-Z0-9]*', text)
+print(Counter(all_ids).most_common(15))
+
+print('\n=== Repeated structural phrases ===')
+phrases = [
+    'fall through',
+    'user-extensible',
+    'REQ-V8/V11',
+    'does not expand automation',
+    'Does not violate REQ-A11',
+    'first-class',
+    'never guess',
+    'do not invent',
+    'single-shot',
+    'always-visible',
+    'on-device',
+    'comprehension',
+]
+for p in phrases:
+    print(f'{text.lower().count(p.lower()):3}  {p}')
+
+print('\n=== Section structure ===')
+for i,l in enumerate(lines,1):
+    if l.startswith('##'):
+        print(f'{i}: {l}')
+PY (Analyze REQ structure, gaps, repetition)
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 <<'PY'
+import re
+from pathlib import Path
+text = Path('REQUIREMENTS.md').read_text()
+
+# Find multi-form selection patterns (V15, V16, A14, A15)
+print('=== Selection form requirements ===')
+for m in re.finditer(r'^- \*\*(REQ-[A-Z0-9]+)[^*]+\*\*', text, re.M):
+    title = m.group(0)[:120]
+    if any(k in title.lower() for k in ['form', 'gamble', 'energy', 'race', 'option', 'semantic', 'select']):
+        print(title[:110])
+
+# Voice command defaults scattered
+print('\n=== Shipped default phrases mentioned ===')
+for pat in [r'"[^"]{3,40}"', r"\*\*[^*]{3,30}\*\*"]:
+    pass
+# find "Shipped defaults" and default phrases
+for m in re.finditer(r'.{0,40}(default|Shipped|phrase).{0,80}', text):
+    s = m.group(0).replace('\n',' ')
+    if any(w in s.lower() for w in ['"race"', 'gamble', 'safe', 'energy', 'g1', 'listen', 'option']):
+        if len(s) < 150:
+            print('-', s[:140])
+PY (Find parallel selection-form patterns)
+
+## Assistant
+
+## Refactor check — golden opportunities
+
+~2200 lines, **~80 REQs**, no duplicate IDs. IDs are **intentionally stable** (doc status line), so renumbering is a *bad* “refactor.” Real wins are **structure, shared patterns, and dead weight**.
+
+---
+
+### Tier 1 — High value, low ID risk
+
+**1. Extract a shared “multi-form selection” pattern**  
+You now have the same shape in several places:
+
+| Spec | Domain |
+|---|---|
+| **REQ-V15** | Event options |
+| **REQ-V16** | Race list |
+| **REQ-A14** | gamble / safe |
+| **REQ-A15** | take the energy |
+
+Repeated machinery: ordinal · on-screen text · semantic role · fall-through if ambiguous · V8/V11 phrases · concrete id for A4/A8 · V4/V12 confirm.
+
+**Refactor:** one short meta-REQ (e.g. under §6.2 or §6.3), e.g. **“list/choice selection forms — shared rules”**, then V15/V16/A14/A15 only state *domain-specific* forms. Cuts a lot of prose and keeps new surfaces (skills, shop) cheap.
+
+**2. Unify “select + begin” compounds under V12**  
+Same commit pattern, three spellings:
+
+- `"G1 G1"` → select + begin  
+- `"just race the scheduled race"` → open + select + begin  
+- V12 repeat-to-confirm generally  
+
+**Refactor:** one rule: *repeat same selection action (or dedicated compound) within confirm window = select+commit when the game has a begin step.* V16 only lists which race pointers support double-begin (grade required; name/default encouraged).
+
+**3. “Standing rules” strip for cross-cuts**  
+These are restated constantly: **A5** (no self-loop), **A6** (human speed ceiling), **A11** (no independent decisions), **M3 fall-through**, **S1** (no network), **V4/V12** confirm.
+
+**Refactor:** a tight § (or box at start of §6) “Standing constraints — all features inherit these,” then body REQs **cite** instead of re-explaining. Biggest readability win for agents skimming.
+
+**4. Corpus stack as one picture**  
+Scattered: **M3/M5/M6/M7**, **F4** labels, **A14** tags, **A15** energy fields, **A15a** Effects path.
+
+**Refactor:** one subsection “Offline corpus layers” (identity · text · no-choice · gamble/safe · energy · UI templates) + “live Effects fallback.” Implementation and labeling become obvious.
+
+---
+
+### Tier 2 — Medium value (hygiene)
+
+**5. Document order vs numeric order**  
+A16 sits before A10; V11 before V9; F5 before F2. Fine for stable IDs, bad for reading.
+
+**Refactor:** reorder *prose* into theme blocks without changing IDs:
+
+- View assist: A9 → A16 → A10  
+- Decision memory: A4 → A8 → A14 → A15  
+- Voice selection: V15 → A14/A15 refs → V16  
+
+**6. Collapse §9 RESOLVED entries**  
+REQ-OQ2 wants history kept, but many RESOLVED blocks are long.
+
+**Refactor:** RESOLVED = one line (question + answer + REQ id); OPEN/BLOCKING keep full text. Cuts registry noise a lot.
+
+**7. Graduate or corral stubs**  
+`REQ-S2`, `REQ-SF6`, `REQ-ON1` + awkward **§8.1a**.
+
+**Refactor:** either “§ X Stubs / gap REQs” or flesh ON1 into real first-run flow next to V1. Stops stubs looking like finished design.
+
+**8. Retire A13 more cleanly**  
+Withdrawn body still occupies automation § mentally.
+
+**Refactor:** move withdrawn IDs to a short appendix; leave one-line “A13 withdrawn → see A8” in place.
+
+**9. V7 inventory vs V16**  
+Races are half-specified in V16 but OQ-22 still says “races in full.”
+
+**Refactor:** V7 inventory = checklist table; V16/A9/… = the real specs; OQ-22 only tracks *unobserved* rows.
+
+---
+
+### Tier 3 — Don’t bother (or do later)
+
+| Temptation | Why not |
+|---|---|
+| Renumber REQs into perfect order | Breaks “IDs stable”; breaks map, chat, git history |
+| Merge A14+A15+V15 into one giant REQ | Becomes unreadable; domains differ |
+| Delete all RESOLVED OQs | Loses self-contained history (REQ-OQ2) |
+| Split file into many MD files | Hurts single-doc pickup story unless tooling catches up |
+
+---
+
+### Already in decent shape
+
+- **A10 + A16** sharing one sweep toggle — right model  
+- **P3** docs-open / app-closed — clear  
+- **No duplicate REQ ids**  
+- **Map generator** as projection of the doc — good  
+
+---
+
+### Suggested order if you want refactors done
+
+1. Standing-rules strip + cite-don’t-repeat  
+2. Shared multi-form selection meta-REQ; slim V15/V16/A14/A15  
+3. Double-begin unified under V12; V16 only lists race cases  
+4. Corpus layers subsection  
+5. Reorder blocks by theme (IDs unchanged)  
+6. Collapse RESOLVED OQs to one-liners  
+7. Stub corral / A13 appendix  
+
+I have **not** applied these yet — this was a check.  
+
+Want me to implement **1–3** next (biggest clarity win, no ID renumbering), or a different subset?
+
+## User
+
+for the aoharu hai scenario, allow choosing of a facility by unambiguously indicating a particular spirit burst type. these are for example "purple" "blue" or if there is only one purple or blue then "burst" or "Spirit burst" would suffice. 
+
+## Assistant
+
+Adding Aoharu Hai spirit-burst facility selection (color / unambiguous "burst"), parallel to grade-based race selection.
+
+## Tools
+
+- Search: training facility|Speed/Stamina|REQ-V7|facility|Aoharu|scenario
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (956-1005)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Add REQ-V17: Aoharu Hai facility pick by spirit burst type/color
+
+Select training facility via purple/blue/etc. when unique; bare burst or
+spirit burst when only one burst is on screen. Scenario/chrome-gated;
+fall through if ambiguous. Residual OQ-42 for full color inventory.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push REQ-V17 spirit burst selection)
+- Search: REQ-V17|OQ-42|spirit burst|Aoharu
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1411-1450)
+- Execute: cd /home/dev/UMAssisted && git show --stat HEAD && git show HEAD -- REQUIREMENTS.md | head -80; grep -n "Aoharu\|spirit\|V17\|OQ-42" REQUIREMENTS.md || echo 'none in file' (Inspect last commit and Aoharu content)
+
+## Assistant
+
+Inserting the full REQ-V17 body — only the cross-ref and OQ made it in last time.
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+Complete REQ-V17 body: Aoharu Hai spirit-burst facility selection
+
+Full rules for purple/blue/etc. when unique, bare burst/spirit burst when
+only one burst is showing, scenario/chrome gating, and fall-through when
+ambiguous. Cross-ref and OQ-42 already present from prior commit.
+EOF
+)" && git push origin master && grep -n "REQ-V17" REQUIREMENTS.md | head -5 && git log --oneline -2 (Add full REQ-V17 body, regenerate, push)
+
+## Assistant
+
+Added **REQ-V17** (Aoharu Hai spirit-burst facility pick).
+
+### Selection rules
+| Utterance | When it works |
+|---|---|
+| **"purple"**, **"blue"**, … | Exactly one facility has that burst type |
+| **"burst"** / **"spirit burst"** | Exactly one facility has *any* burst |
+| Ambiguous (2+ purples, or 2+ any bursts for bare "burst") | Fall through — no guess |
+
+### Other details
+- Same action family as saying **"speed"** / **"stamina"** (confirm rules unchanged)
+- Only on training UI when spirit-burst chrome is present
+- Screen understanding only — not “pick the best burst”
+- Works with auto-sweep TTS announcements when detection is solid
+
+**OQ-42**: full color/type inventory on Global. Pushed as `b0d5881`.
+
+## User
+
+"energy" shall be taken as a synonym for "Wit" facility
+
+## Tools
+
+- Search: Wit|Speed/Stamina|training facility|REQ-V8|REQ-V14
+- Read: /home/dev/UMAssisted/REQUIREMENTS.md (1046-1085)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-V8: ship "energy" as default synonym for Wit training facility
+
+Context-gated to training UI so it does not conflict with A15 take-the-
+energy on event choice screens. Noted under V11/V14 as well.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push energy→Wit synonym)
+
+## Assistant
+
+Recorded under **REQ-V8** (also noted in V11/V14):
+
+- On the **training** UI, **"energy"** is a shipped default synonym for **Wit** (same as "wit").
+- On **event choices**, energy-best stays **"take the energy"** (**REQ-A15**) so bare "energy" doesn’t steal that meaning.
+
+Pushed as `546100e`.
+
+## User
+
+"date" is a synonym for "recreation"
+
+## Tools
+
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add REQUIREMENTS.md requirements-map.html docs/ && git commit -m "$(cat <<'EOF'
+REQ-V8: ship "date" as default synonym for Recreation
+
+Player-natural language for the hub Recreation action; user-overridable.
+EOF
+)" && git push origin master && git log --oneline -1 (Commit and push date→Recreation synonym)
+
+## Assistant
+
+Recorded under **REQ-V8**: **"date"** is a shipped default synonym for **Recreation** (same action as "recreation"), user-overridable.
+
+Pushed as `16fb3fb`.
+
+## User
+
+what are some open items?
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && grep -n "— OPEN\|— BLOCKING\|— DEFERRED\|WITHDRAWN\|Stub\|stub requirement\|soft, conditional\|Tentative\|partially enumerated\|residual" REQUIREMENTS.md | head -80 (List open/blocking/deferred registry items)
+
+## Assistant
+
+### Blocking (need device / you)
+| ID | Topic |
+|---|---|
+| **OQ-1** | Does the client block `AccessibilityService` gestures? (REQ-DEV3 spike) |
+| **OQ-22** | Full in-career voice inventory — still need screenshots for Shop purchase, Skills, Races (beyond V16), Recreation, Infirmary, hamburger, post-career |
+
+### Empirical / calibration (play + device)
+| ID | Topic |
+|---|---|
+| **OQ-33** | Shared bucket: A12 tap thresholds, M6 match confidence/crops, A9 dwell, V12 confirm window, V11 phrase-warn |
+| **OQ-29** | Accidental-tap numbers (in OQ-33) |
+| **OQ-31** | OCR/match thresholds & crops (in OQ-33) |
+| **OQ-39** | How much option text must be spoken to match |
+
+### Screen / data inventory (observation)
+| ID | Topic |
+|---|---|
+| **OQ-38** | Gamble/safe tagging edge cases (3+ options, dual gambles) |
+| **OQ-40** | Effects / Choices UI + where energy lives |
+| **OQ-41** | Race-list chrome, begin button, pre-race controls |
+| **OQ-42** | Aoharu spirit-burst colors/types |
+| **OQ-17** | Visually identical screen, hidden choice? (policy set; occurrence unconfirmed) |
+
+### Product stubs (named but thin)
+| ID | Topic |
+|---|---|
+| **REQ-S2 / OQ-34** | Config export/import format |
+| **REQ-SF6 / OQ-35** | Behavior when game not foreground (stub exists; details open) |
+| **REQ-ON1 / OQ-36** | Low-motor first-run permissions |
+| **OQ-37** | Battery/CPU budgets for always-listen + OCR |
+
+### Deferred / out of 1.0 core
+| ID | Topic |
+|---|---|
+| **OQ-7** | Switch / dwell-gaze as second alt input |
+| **REQ-H1** | Haptic/motion — design deferred |
+| **REQ-R1/R2** | Tap record & playback — provisional **2.0** |
+| **REQ-A13** | “Don’t save” — **withdrawn** |
+| **REQ-T4** | TTS soft/conditional for 1.0 |
+| **REQ-PL2** | PC/Steam — later |
+
+### Architecture: largely unblocked
+Most process/engine/API questions (corpus source, matching strategy, voice engines, API 30, config UI shape, etc.) are **resolved**. What’s left is mostly **spikes, screenshots, and tuning**.
+
+**Highest-leverage next steps:** OQ-1 gesture spike, or OQ-22 screenshots (especially races / skills / shop).
+
+## User
+
+okay, let's do screenshots for a while
+
+## Assistant
+
+Setting up for passive screenshots (observation only — no game input injection). Checking device and adb.
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}:/usr/local/bin"
+which adb; adb version 2>&1 | head -3
+adb devices -l 2>&1
+ls -la ~/japanglify/sdk/platform-tools/adb 2>/dev/null || ls -la ~/Android/Sdk/platform-tools/adb 2>/dev/null || find ~ -name adb -type f 2>/dev/null | head -5
+ (Locate adb and list connected devices)
+- Execute: grep -n "adb connect\|ip:port\|wireless\|5555\|pairing" /home/dev/UMAssisted/session1.txt 2>/dev/null | tail -30
+grep -n "adb connect\|wireless" /home/dev/UMAssisted/REQUIREMENTS.md
+ls -la /home/dev/UMAssisted/screenshots 2>/dev/null; ls /tmp/*uma* /tmp/*screenshot* 2>/dev/null | head
+ (Find prior adb connection hints and screenshot dirs)
+- Execute: mkdir -p /home/dev/UMAssisted/screenshots/{hub,races,skills,shop,recreation,infirmary,events,aoharu,misc}
+# helper for capture
+cat > /home/dev/UMAssisted/tools/capture_screen.sh << 'EOF'
+#!/bin/sh
+# Passive screenshot: no input injection. Usage: capture_screen.sh <label>
+# Saves under screenshots/<subdir or misc>/<timestamp>_<label>.png
+set -e
+export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+LABEL="${1:-screen}"
+SUB="${2:-misc}"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+DIR="${ROOT}/screenshots/${SUB}"
+mkdir -p "$DIR"
+TS="$(date +%Y%m%d_%H%M%S)"
+OUT="${DIR}/${TS}_${LABEL}.png"
+REMOTE="/sdcard/uma_cap_${TS}.png"
+adb shell screencap -p "$REMOTE"
+adb pull "$REMOTE" "$OUT" >/dev/null
+adb shell rm -f "$REMOTE" 2>/dev/null || true
+# also dump uiautomator (passive) next to it
+DUMP="${DIR}/${TS}_${LABEL}.uixml"
+adb shell uiautomator dump /sdcard/uma_ui.xml 2>/dev/null || true
+adb pull /sdcard/uma_ui.xml "$DUMP" 2>/dev/null || true
+adb shell rm -f /sdcard/uma_ui.xml 2>/dev/null || true
+echo "saved $OUT"
+# quick package check
+adb shell dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -3
+EOF
+chmod +x /home/dev/UMAssisted/tools/capture_screen.sh
+echo "ready"
+ (Create screenshots dirs and capture helper)
+- Tool: Ask: No Android device is attached to adb right now. How do you want to connect for screenshots?
+
+## Assistant
+
+**Ready for wireless adb.** Capture is passive only (`screencap` + `uiautomator dump`) — no taps into the game.
+
+### Send me either:
+
+**Already paired on this machine:**
+```text
+adb connect <ip>:<port>
+```
+(e.g. `192.168.1.20:39567`)
+
+**First time / new pairing:**
+1. Pairing IP:port  
+2. 6-digit pairing code  
+3. Then the connection IP:port (often different from the pairing port)
+
+Phone: **Settings → Developer options → Wireless debugging** (and pair if needed).
+
+---
+
+### Once connected, target order (OQ-22 gaps)
+
+1. **Races** — list, default/scheduled highlight, G1/G2/G3 rows, begin button  
+2. **Skills** — list structure  
+3. **Shop** — browse + purchase UI  
+4. **Recreation / Infirmary** flows  
+5. **Hamburger** menu  
+6. **Aoharu** training (spirit bursts) if you’re in that scenario  
+7. Anything else useful mid-flow  
+
+You navigate; say **snap** (and a short label if you want) and I’ll capture.
+
+Paste the **IP:port** (and pairing code if needed) when ready.
+
+## User
+
+192.168.1.123:38841
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+adb connect 192.168.1.123:38841
+sleep 1
+adb devices -l
+adb shell getprop ro.product.model 2>&1
+adb shell dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -3
+adb shell pm path com.cygames.umamusume 2>&1 | head -2
+ (Connect adb wireless and check game package)
+
+## Assistant
+
+**Connected:** Pixel 8 @ `192.168.1.123:38841`  
+Umamusume is installed. Foreground is still **Settings** (wireless debugging).
+
+### Next
+1. Open **Umamusume** and go somewhere useful (hub, races list, skills, shop, …).
+2. Say **snap** + optional label (e.g. `snap races-list`).
+
+I only capture screenshots/UI dumps — you drive all game taps.
+
+When you’re on the first screen, say **snap**.
+
+## User
+
+snap
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+adb devices
+# determine subdir from focus if possible
+FOCUS=$(adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | head -1)
+echo "focus: $FOCUS"
+/home/dev/UMAssisted/tools/capture_screen.sh snap01 hub
+# show what we got
+ls -la /home/dev/UMAssisted/screenshots/hub/ | tail -5
+# if image exists, we can try to identify - read with read tool if png
+LATEST=$(ls -t /home/dev/UMAssisted/screenshots/hub/*.png 2>/dev/null | head -1)
+echo "latest: $LATEST"
+file "$LATEST"
+ (Capture screenshot and UI dump from device)
+- Read: /home/dev/UMAssisted/screenshots/hub/20260812_083648_snap01.png
+- Read: /home/dev/UMAssisted/screenshots/hub/20260812_083648_snap01.uixml
+
+## Assistant
+
+**Captured** `screenshots/hub/20260812_083648_snap01.png` (1080×2400)
+
+### Screen: in-career training hub (Junior Year Pre-Debut)
+- **Haru Urara**, 2 turns left · goal: Junior Make Debut  
+- Stats row: Speed / Stamina / Power / Guts / **Wit** · Skill Pts  
+- Actions: **Rest**, **Training**, **Skills**, **Infirmary**, **Recreation**, **Races** (locked)  
+- Also: Skip, Quick, Log, hamburger, Full Stats, HINT, NORMAL, Details  
+
+UI tree is still opaque `unitySurfaceView` (as expected).
+
+Useful for REQ-V7 hub inventory. **Races** is locked this early — we’ll need a later turn for race-list shots.
+
+Navigate to the next screen and say **snap** (e.g. Training open, Skills, Recreation).
+
+## User
+
+note that we're in aoharu hai
+
+## Assistant
+
+Recording that this career is Aoharu Hai (Global: Unity Cup) for the capture set and REQ-V17.
+
+## Tools
+
+- Execute: cd /home/dev/UMAssisted && cat > screenshots/SESSION_NOTES.md << 'EOF'
+# Screenshot session notes
+
+## Active career context
+
+- **Scenario: Aoharu Hai** (JP name). On Global this run shows as **Unity Cup**
+  in UI chrome (e.g. "Until the Unity Cup" on the training hub).
+- Captures from this session should be treated as **Aoharu Hai / Unity Cup**
+  scenario screens unless a note says otherwise.
+- Relevant requirements: **REQ-V17** (spirit-burst facility pick), **REQ-QA4**
+  (scenario-specific coverage).
+
+## Captures
+
+| File | Notes |
+|------|--------|
+| `hub/20260812_083648_snap01.png` | In-career training hub; Junior Year Pre-Debut; Haru Urara; Races locked; Unity Cup turn counter visible |
+EOF
+# also rename label on file for clarity via a sidecar
+echo "aoharu_hai_unity_cup training_hub junior_pre_debut" > screenshots/hub/20260812_083648_snap01.labels.txt
+ (Write session notes for Aoharu Hai context)
+- Edit: /home/dev/UMAssisted/REQUIREMENTS.md
+- Execute: cd /home/dev/UMAssisted && /usr/local/bin/python3.12 tools/gen_requirements_map.py >/dev/null && git add screenshots/SESSION_NOTES.md screenshots/hub/ REQUIREMENTS.md requirements-map.html docs/ && git status && git commit -m "$(cat <<'EOF'
+Note Aoharu Hai (= Global Unity Cup) for capture session and REQ-V17
+
+Session notes + hub capture labels; Global UI string "Unity Cup" recorded
+as the localization of Aoharu Hai for scenario gating.
+EOF
+)" && git push origin master && git log --oneline -1
+ (Commit Aoharu/Unity Cup notes and REQ-V17 update)
+
+## Assistant
+
+Noted.
+
+- **Session:** this career is **Aoharu Hai** (Global UI: **Unity Cup** — matches the hub “Until the Unity Cup” string).
+- Logged in `screenshots/SESSION_NOTES.md` and on the hub capture labels.
+- **REQ-V17** updated: Global **Unity Cup** = Aoharu Hai; arm via burst chrome / scenario id, not the player saying the right name.
+
+Pushed as `8ac3c70`. Say **snap** when you’re on the next screen.
+
+## User
+
+snap
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+adb devices | head -5
+FOCUS=$(adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | head -1)
+echo "focus: $FOCUS"
+# use misc or detect - put in hub for now, can reclassify after viewing
+/home/dev/UMAssisted/tools/capture_screen.sh snap02 misc
+LATEST=$(ls -t /home/dev/UMAssisted/screenshots/misc/*.png 2>/dev/null | head -1)
+echo "latest: $LATEST"
+ls -la "$LATEST"
+ (Capture next screenshot from device)
+- Read: /home/dev/UMAssisted/screenshots/misc/20260812_083744_snap02.png
+- Execute: cd /home/dev/UMAssisted
+mkdir -p screenshots/training
+mv screenshots/misc/20260812_083744_snap02.png screenshots/training/
+mv screenshots/misc/20260812_083744_snap02.uixml screenshots/training/ 2>/dev/null || true
+echo "aoharu_hai_unity_cup training_sub_screen facilities wit_selected" > screenshots/training/20260812_083744_snap02.labels.txt
+# append to session notes
+cat >> screenshots/SESSION_NOTES.md << 'EOF'
+| `training/20260812_083744_snap02.png` | Training sub-screen; five facilities Speed–Wit Lvl 1; Wit selected (Studying); failure 0%; stat deltas on preview; Back/Skip/Quick/Log/menu. No multi-color spirit-burst badges obvious yet (early Junior). |
+EOF
+ls -la screenshots/training/
+ (File snap02 under training/ and update notes)
+
+## Assistant
+
+**Captured** `screenshots/training/20260812_083744_snap02.png`
+
+### Screen: Training sub-screen (Aoharu / Unity Cup)
+- Five facilities: **Speed / Stamina / Power / Guts / Wit** (all Lvl 1)
+- **Wit** selected — “Studying”, preview deltas (+2 Speed, +6 Wit, +5 SP), Failure 0%
+- Back, Skip, Quick, Log, hamburger
+- No clear multi-color **spirit burst** badges yet (early Junior) — still useful for facility layout / A9 / V8
+
+Say **snap** on the next screen (or open Skills / Recreation / etc.).
+
+## User
+
+saying "Snap" out loud didn't do anything
+
+## Assistant
+
+**“Snap” only works as a message in this chat** — not spoken out loud on the phone.
+
+Nothing is listening for a wake word yet:
+- **UMAssisted voice** is still requirements-only (not installed)
+- **Screenshot capture** is me running `adb screencap` when you **type** `snap` here
+
+### Workflow
+1. You navigate the game by hand  
+2. You type **`snap`** (optional label: `snap skills`)  
+3. I pull the screenshot  
+
+Saying “Snap” to the room or into the game won’t reach this session.
+
+If you want a capture of whatever’s on screen **right now**, type **`snap`**.
+
+## User
+
+snap
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+adb devices | head -3
+/home/dev/UMAssisted/tools/capture_screen.sh snap03 misc
+LATEST=$(ls -t /home/dev/UMAssisted/screenshots/misc/*.png 2>/dev/null | head -1)
+echo "latest: $LATEST"
+ (Capture screenshot snap03)
+- Read: /home/dev/UMAssisted/screenshots/misc/20260812_084014_snap03.png
+- Execute: cd /home/dev/UMAssisted
+mv screenshots/misc/20260812_084014_snap03.png screenshots/training/
+mv screenshots/misc/20260812_084014_snap03.uixml screenshots/training/ 2>/dev/null || true
+echo "aoharu_hai training_sub guts_selected incline failure_3pct" > screenshots/training/20260812_084014_snap03.labels.txt
+cat >> screenshots/SESSION_NOTES.md << 'EOF'
+| `training/20260812_084014_snap03.png` | Training sub-screen; **Guts** selected (Incline Lvl 1); failure 3%; support icon top-right; same five facilities |
+EOF
+ (Classify snap03 as training Guts preview)
+
+## Assistant
+
+**Captured** `screenshots/training/20260812_084014_snap03.png`
+
+### Training sub-screen — **Guts** selected
+- “Incline” Lvl 1 · Failure **3%** · deltas on Speed/Power/Guts/SP  
+- Same five facilities; support face top-right  
+- Still no multi-color spirit-burst badges  
+
+Type **`snap`** again when you change screens (e.g. Skills, Rest confirm, event choice).
+
+## User
+
+snap
+
+## Tools
+
+- Execute: export PATH="${HOME}/japanglify/sdk/platform-tools:${PATH}"
+/home/dev/UMAssisted/tools/capture_screen.sh snap04 misc
+LATEST=$(ls -t /home/dev/UMAssisted/screenshots/misc/*.png 2>/dev/null | head -1)
+echo "latest: $LATEST"
+ (Capture screenshot snap04)
+- Read: /home/dev/UMAssisted/screenshots/misc/20260812_084037_snap04.png
+- Execute: cd /home/dev/UMAssisted
+mv screenshots/misc/20260812_084037_snap04.png screenshots/training/
+mv screenshots/misc/20260812_084037_snap04.uixml screenshots/training/ 2>/dev/null || true
+echo "aoharu_hai training_sub power_selected dirt supports_right failure_1pct" > screenshots/training/20260812_084037_snap04.labels.txt
+cat >> screenshots/SESSION_NOTES.md << 'EOF'
+| `training/20260812_084037_snap04.png` | Training sub-screen; **Power** selected (Dirt Lvl 1); failure 1%; **four support faces** stacked right with blue friendship/spirit-style badges — useful for support presence UI, not facility spirit-burst yet |
+EOF
+ (Classify snap04 as Power training with supports)
+
+## Assistant
+
+**Captured** `screenshots/training/20260812_084037_snap04.png`
+
+### Training — **Power** selected
+- “Dirt” Lvl 1 · Failure **1%** · solid Power/Speed/SP deltas  
+- **Four support portraits** stacked on the right with blue badges (friendship / bond style)  
+- Still facility-preview chrome; not Aoharu spirit-burst-on-facility yet  
+
+Type **`snap`** for the next screen.
+
+## User
+
+snap
+
+## User
+
+snap
+
+## User
+
+what did we just snap?
