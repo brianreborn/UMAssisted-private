@@ -5,11 +5,18 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Switch
+import android.widget.TextView
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -67,6 +74,12 @@ class UMAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastForegroundPackage: String? = null
 
+    // Overlay kill switches (REQ-A7 / REQ-A10 / REQ-V9)
+    private var overlayView: View? = null
+    private var overlayStatusText: TextView? = null
+    private var overlaySweepSwitch: Switch? = null
+    private var overlayVoiceSwitch: Switch? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "Service connected")
@@ -92,11 +105,18 @@ class UMAccessibilityService : AccessibilityService() {
                 lastOcrText = ""
                 lastWasNoChoice = false
                 lastMatchReason = ""
+                hideOverlay()
             }
             return
         }
+        val wasInUma = isInUma
         isInUma = true
         lastForegroundPackage = activePkg
+
+        // Always-visible kill switches (REQ-A7/A10/V9): show as soon as Uma becomes
+        // foreground, not gated behind opening MainActivity — MainActivity is a
+        // separate backgrounded app the whole time Uma is on screen.
+        if (!wasInUma) showOverlay() else refreshOverlay()
 
         // Alpha: we do not auto-react on every event.
         // Real work is driven by explicit user commands (sweep, voice, or manual capture).
@@ -107,12 +127,14 @@ class UMAccessibilityService : AccessibilityService() {
         // Required override. Stop any pending actions.
         handler.removeCallbacksAndMessages(null)
         actionGeneration++ // invalidate any in-flight command chain
+        hideOverlay()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "Service unbinding")
         handler.removeCallbacksAndMessages(null)
         actionGeneration++
+        hideOverlay()
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -122,6 +144,7 @@ class UMAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Service destroyed")
         handler.removeCallbacksAndMessages(null)
         actionGeneration++
+        hideOverlay()
         if (instance === this) instance = null
     }
 
@@ -332,11 +355,13 @@ class UMAccessibilityService : AccessibilityService() {
             // Do NOT auto-start a loop. Per REQ-A5 a fresh command is required.
             // The sweep is a *mode* that the next explicit "start sweep" command will use.
         }
+        refreshOverlay()
     }
 
     fun setVoiceEnabled(enabled: Boolean) {
         voiceEnabled = enabled
         Log.i(TAG, "Voice listening ${if (enabled) "ENABLED" else "DISABLED"}")
+        refreshOverlay()
     }
 
     /**
@@ -744,6 +769,84 @@ class UMAccessibilityService : AccessibilityService() {
             .build()
 
         startForeground(1, notification)
+    }
+
+    // ============================================================
+    // Overlay kill switches (REQ-A7 / REQ-A10 / REQ-V9)
+    //
+    // TYPE_ACCESSIBILITY_OVERLAY, not TYPE_APPLICATION_OVERLAY: an AccessibilityService
+    // can add this window type directly, no SYSTEM_ALERT_WINDOW permission or user
+    // "draw over other apps" grant needed. Shown only while isInUma is true; removed
+    // the instant the user leaves Uma or the service is interrupted/unbound/destroyed,
+    // so it never lingers over another app (REQ-SF1).
+    // ============================================================
+
+    private fun showOverlay() {
+        if (overlayView != null) {
+            refreshOverlay()
+            return
+        }
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val view = LayoutInflater.from(this).inflate(R.layout.overlay_control, null)
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                x = 16
+                y = 96
+            }
+
+            overlayStatusText = view.findViewById(R.id.overlayStatusText)
+            overlaySweepSwitch = view.findViewById<Switch>(R.id.overlaySweepSwitch).apply {
+                isChecked = sweepEnabled
+                setOnCheckedChangeListener { _, checked -> setSweepEnabled(checked) }
+            }
+            overlayVoiceSwitch = view.findViewById<Switch>(R.id.overlayVoiceSwitch).apply {
+                isChecked = voiceEnabled
+                setOnCheckedChangeListener { _, checked -> setVoiceEnabled(checked) }
+            }
+
+            wm.addView(view, params)
+            overlayView = view
+            refreshOverlay()
+            Log.i(TAG, "Overlay shown")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to show overlay", t)
+            overlayView = null
+        }
+    }
+
+    private fun hideOverlay() {
+        val view = overlayView ?: return
+        try {
+            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(view)
+            Log.i(TAG, "Overlay hidden")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to remove overlay view", t)
+        }
+        overlayView = null
+        overlayStatusText = null
+        overlaySweepSwitch = null
+        overlayVoiceSwitch = null
+    }
+
+    /**
+     * Keep the overlay's switches/status in sync with live state, regardless of
+     * whether the change originated from the overlay itself or from MainActivity.
+     * Safe to call when the overlay isn't currently shown (no-op).
+     */
+    fun refreshOverlay() {
+        val sweepSwitch = overlaySweepSwitch ?: return
+        val voiceSwitch = overlayVoiceSwitch ?: return
+        if (sweepSwitch.isChecked != sweepEnabled) sweepSwitch.isChecked = sweepEnabled
+        if (voiceSwitch.isChecked != voiceEnabled) voiceSwitch.isChecked = voiceEnabled
+        overlayStatusText?.text = if (isInUma) "UMAssisted — active" else "UMAssisted"
     }
 
     // Gesture helper (will be expanded)

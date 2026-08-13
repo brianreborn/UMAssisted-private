@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- REQ-A7 / REQ-A10 / REQ-V9: always-visible overlay kill switches, shown by
+     UMAccessibilityService (TYPE_ACCESSIBILITY_OVERLAY) whenever isInUma is true.
+     Plain framework widgets only (Switch, not SwitchCompat) — this is inflated
+     from a bare Service context with no AppCompat theme attached. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#CC1B1B1B"
+    android:padding="10dp">
+
+    <TextView
+        android:id="@+id/overlayStatusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="UMAssisted"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:paddingBottom="6dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sweep"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:minWidth="48dp" />
+
+        <Switch
+            android:id="@+id/overlaySweepSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:scaleX="0.8"
+            android:scaleY="0.8" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Voice"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:minWidth="48dp" />
+
+        <Switch
+            android:id="@+id/overlayVoiceSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:scaleX="0.8"
+            android:scaleY="0.8" />
+    </LinearLayout>
+
+</LinearLayout>
