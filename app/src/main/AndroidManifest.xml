@@ -4,6 +4,13 @@
     <!-- No INTERNET permission (REQ-S1) -->
     <!-- No other dangerous permissions for alpha -->
 
+    <!-- Required for the AccessibilityService's startForeground() call (REQ-A7 always-on
+         kill-switch notification). Without these two, onServiceConnected() throws
+         SecurityException on every bind attempt and the OS marks the service "crashed",
+         permanently refusing to rebind it until manually toggled off/on in Settings. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
         android:name=".UMAssistedApp"
         android:allowBackup="false"
@@ -25,6 +32,10 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+            <!-- Required alongside foregroundServiceType="specialUse" on API 34+. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Accessibility service: on-device tap/dialogue automation assistance for a player with limited mobility." />
         </service>
 
         <!-- Simple launcher activity for settings / overlay toggle (REQ-A7) -->
