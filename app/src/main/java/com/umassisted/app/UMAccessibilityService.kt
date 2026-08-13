@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -312,7 +313,32 @@ class UMAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "Taking screenshot for OCR...")
 
-        takeScreenshot(0, ocrExecutor, object : TakeScreenshotCallback {
+        val callback = buildScreenshotCallback(onResult)
+
+        // Capture the game's window rather than the whole composited display, so our
+        // own overlay is structurally excluded — it sits in a separate window above
+        // Uma, and a display-level capture composites it in. That is not theoretical:
+        // a display capture OCR'd "UMAssisted — active / Sweep / Voice / Read screen"
+        // as if it were game text, which would poison corpus matching (REQ-M6) and any
+        // future TTS readout (REQ-T1). This also drops the status/nav bars.
+        //
+        // takeScreenshotOfWindow is API 34+; minSdk is 30, so older devices fall back
+        // to the display capture and will include the overlay. Acceptable for now
+        // (alpha targets a single Android 14+ device) but it is a real fidelity gap
+        // on 11–13 — worth hiding the overlay around the capture if that ever matters.
+        val windowId = rootInActiveWindow?.windowId ?: -1
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && windowId != -1) {
+            takeScreenshotOfWindow(windowId, ocrExecutor, callback)
+        } else {
+            Log.w(TAG, "Falling back to display capture (API ${Build.VERSION.SDK_INT}, windowId=$windowId) — overlay text may be OCR'd")
+            takeScreenshot(0, ocrExecutor, callback)
+        }
+    }
+
+    private fun buildScreenshotCallback(
+        onResult: ((recognizedText: String, isNoChoice: Boolean) -> Unit)?
+    ): TakeScreenshotCallback {
+        return object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
                 // ScreenshotResult has no getBitmap() — the real API exposes a
                 // HardwareBuffer + ColorSpace, wrapped into a Bitmap. The buffer must be
@@ -372,7 +398,7 @@ class UMAccessibilityService : AccessibilityService() {
                 lastMatchReason = ""
                 onResult?.invoke("", false)
             }
-        })
+        }
     }
 
     // ============================================================
