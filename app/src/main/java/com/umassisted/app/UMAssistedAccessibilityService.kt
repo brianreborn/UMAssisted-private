@@ -565,7 +565,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      * context are simply ignored, same as any other command with no live target.
      */
     private fun onVoiceUtterances(candidates: List<String>) {
-        Log.i(TAG, "Voice recognized candidates: $candidates")
+        // REQ-S3: raw recognized-speech content is never logged outside a debug build —
+        // this is what the user said, not what the code did.
+        if (BuildConfig.DEBUG) Log.i(TAG, "Voice recognized candidates: $candidates")
         if (!isInUma || !sweepEnabled) return
 
         val facilityIndex = FacilityVocabulary.matchFacility(candidates)

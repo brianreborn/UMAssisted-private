@@ -47,6 +47,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sweepRestartOnSignalSwitch: SwitchCompat
     private lateinit var sweepHeartbeatWindowLabel: TextView
     private lateinit var sweepHeartbeatWindowSeekBar: SeekBar
+    private lateinit var voiceMuteChimeSwitch: SwitchCompat
+    private lateinit var voiceSilenceTimeoutLabel: TextView
+    private lateinit var voiceSilenceTimeoutSeekBar: SeekBar
 
     // Human-meaningful grid the period slider snaps to, rather than every raw
     // millisecond — matches how a person actually thinks about pacing ("about
@@ -82,12 +85,16 @@ class MainActivity : AppCompatActivity() {
         sweepRestartOnSignalSwitch = findViewById(R.id.sweepRestartOnSignalSwitch)
         sweepHeartbeatWindowLabel = findViewById(R.id.sweepHeartbeatWindowLabel)
         sweepHeartbeatWindowSeekBar = findViewById(R.id.sweepHeartbeatWindowSeekBar)
+        voiceMuteChimeSwitch = findViewById(R.id.voiceMuteChimeSwitch)
+        voiceSilenceTimeoutLabel = findViewById(R.id.voiceSilenceTimeoutLabel)
+        voiceSilenceTimeoutSeekBar = findViewById(R.id.voiceSilenceTimeoutSeekBar)
 
         // Initialize from current service state
         sweepSwitch.isChecked = UMAssistedAccessibilityService.sweepEnabled
         voiceSwitch.isChecked = UMAssistedAccessibilityService.voiceEnabled
 
         setUpSweepSettingsUi()
+        setUpVoiceSettingsUi()
 
         sweepSwitch.setOnCheckedChangeListener { _, isChecked ->
             UMAssistedAccessibilityService.sweepEnabled = isChecked
@@ -397,6 +404,32 @@ class MainActivity : AppCompatActivity() {
                 val ms = (progress + 2000).toLong()
                 sweepHeartbeatWindowLabel.text = "Signal window: $ms ms"
                 if (fromUser) UserSettings.setSweepHeartbeatWindowMs(ms)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
+    }
+
+    /**
+     * Voice recognizer tuning: chime muting (opt-in, off by default) and the
+     * recognizer's silence-timeout hint. Both read from and write straight to
+     * UserSettings, matching setUpSweepSettingsUi's pattern.
+     */
+    private fun setUpVoiceSettingsUi() {
+        voiceMuteChimeSwitch.isChecked = UserSettings.getVoiceMuteChimeEnabled()
+        voiceMuteChimeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            UserSettings.setVoiceMuteChimeEnabled(isChecked)
+        }
+
+        voiceSilenceTimeoutSeekBar.max = 58000 // maps to [2000, 60000] via +2000 offset
+        val initialSilenceTimeout = UserSettings.getVoiceSilenceTimeoutMs()
+        voiceSilenceTimeoutSeekBar.progress = (initialSilenceTimeout - 2000L).toInt()
+        voiceSilenceTimeoutLabel.text = "Recognition silence timeout: $initialSilenceTimeout ms"
+        voiceSilenceTimeoutSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                val ms = (progress + 2000).toLong()
+                voiceSilenceTimeoutLabel.text = "Recognition silence timeout: $ms ms"
+                if (fromUser) UserSettings.setVoiceSilenceTimeoutMs(ms)
             }
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
             override fun onStopTrackingTouch(seekBar: SeekBar) {}

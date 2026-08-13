@@ -22,6 +22,45 @@ object UserSettings {
     }
 
     /**
+     * Whether to mute STREAM_SYSTEM (the OEM recognition service's own start/
+     * end chime, confirmed separate from game audio) for as long as voice is
+     * armed. Default OFF: muting a whole system stream is a side effect a
+     * user should opt into deliberately, not something imposed on them —
+     * some devices/setups may want the audible cue (e.g. as a landmark for
+     * knowing the mic is live) more than they want it silenced.
+     */
+    fun getVoiceMuteChimeEnabled(): Boolean =
+        prefs.getBoolean("voice_mute_chime_enabled", false)
+
+    fun setVoiceMuteChimeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("voice_mute_chime_enabled", enabled).apply()
+    }
+
+    /**
+     * How long the recognizer should wait in silence before treating an
+     * utterance as finished, in milliseconds — passed as
+     * EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS /
+     * EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS. User-
+     * configurable rather than fixed: some on-device engines ignore these
+     * extras and fall back to their own fixed floor (confirmed empirically
+     * — one engine held to a ~5-6s internal timeout regardless of the value
+     * sent), so raising it is not guaranteed to change anything on every
+     * device, but it costs nothing to expose and helps on engines that do
+     * honor it. Default 8000ms, a bit above that observed floor. Bounds:
+     * [2000, 60000] ms — floor is long enough to finish a short phrase;
+     * ceiling avoids an effectively-frozen mic session.
+     */
+    fun getVoiceSilenceTimeoutMs(): Long {
+        val stored = prefs.getLong("voice_silence_timeout_ms", -1L)
+        return if (stored > 0) stored else 8000L
+    }
+
+    fun setVoiceSilenceTimeoutMs(ms: Long) {
+        val bounded = ms.coerceIn(2000L, 60000L)
+        prefs.edit().putLong("voice_silence_timeout_ms", bounded).apply()
+    }
+
+    /**
      * Full sweep period, in milliseconds (REQ-A9/REQ-A6, replaces the old
      * discrete dwell+slide pair). Selection is by voice, matched against
      * the facility's *name* rather than "whatever the sweep happens to be

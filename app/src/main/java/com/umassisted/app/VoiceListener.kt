@@ -121,7 +121,7 @@ class VoiceListener(
             SpeechRecognizer.createSpeechRecognizer(context)
         }
         recognizer = r.apply { setRecognitionListener(listener) }
-        muteSystemStreamChime()
+        if (UserSettings.getVoiceMuteChimeEnabled()) muteSystemStreamChime()
         startSession()
     }
 
@@ -141,6 +141,9 @@ class VoiceListener(
      * is armed. STREAM_SYSTEM carries that UX cue on the engines observed so far,
      * not game audio (typically STREAM_MUSIC), so this doesn't touch playback.
      * Restored on stop() so muting doesn't outlive the feature being enabled.
+     * Opt-in (UserSettings.getVoiceMuteChimeEnabled, default off) — muting a
+     * whole system stream is a side effect the user should choose, not one
+     * imposed on them; some setups may want the chime as a "mic is live" cue.
      */
     private fun muteSystemStreamChime() {
         try {
@@ -177,9 +180,12 @@ class VoiceListener(
             // ending each session almost immediately in a quiet room. These extend it so
             // the mic stays open and idle rather than closing/reopening on every brief
             // silence; "always-listening" (REQ-V5) should hold the mic open when it can,
-            // not treat ordinary silence as a reason to cycle it.
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 60000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 60000L)
+            // not treat ordinary silence as a reason to cycle it. User-configurable
+            // (UserSettings.getVoiceSilenceTimeoutMs) since some on-device engines
+            // ignore this and hold to their own fixed floor regardless of the value.
+            val silenceTimeoutMs = UserSettings.getVoiceSilenceTimeoutMs()
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 0L)
         }
 

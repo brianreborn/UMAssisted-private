@@ -47,6 +47,32 @@
         android:layout_height="wrap_content"
         android:text="@string/voice_toggle"
         android:textSize="18sp"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Off by default: some setups may want the chime as a "mic is live" cue. -->
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/voiceMuteChimeSwitch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Mute recognition chime while listening"
+        android:textSize="13sp"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Not honored by every on-device engine (some hold to their own fixed
+         floor regardless), but costs nothing to expose for the ones that do. -->
+    <TextView
+        android:id="@+id/voiceSilenceTimeoutLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Recognition silence timeout: 8000 ms"
+        android:textSize="12sp"
+        android:textColor="#888888" />
+
+    <SeekBar
+        android:id="@+id/voiceSilenceTimeoutSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="58000"
         android:layout_marginBottom="20dp" />
 
     <!-- Sweep pacing settings (REQ-A22): visual-comfort pacing, no comprehension

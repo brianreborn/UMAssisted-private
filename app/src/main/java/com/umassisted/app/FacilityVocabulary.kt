@@ -21,24 +21,10 @@ object FacilityVocabulary {
     private fun normalize(utterance: String): String =
         utterance.trim().lowercase()
 
-    /**
-     * Returns the facility index for a recognized utterance, or null if it
-     * matches none. Checks the whole utterance first (the common case: the
-     * user said just the one word), then falls back to scanning word by word
-     * in speaking order — the on-device recognizer's silence window is long
-     * enough that a continuous run of speech ("speed... power... stamina")
-     * can land as one utterance rather than separate ones, and the *first*
-     * facility actually spoken is the one that should arm/confirm, not
-     * "no match" just because the whole string wasn't exactly one word.
-     */
+    /** Returns the facility index for a recognized utterance, or null if it matches none. */
     fun matchFacility(utterance: String): Int? {
         val norm = normalize(utterance)
-        synonyms.indexOfFirst { norm in it }.takeIf { it >= 0 }?.let { return it }
-
-        for (word in norm.split(Regex("[^a-z]+")).filter { it.isNotBlank() }) {
-            synonyms.indexOfFirst { word in it }.takeIf { it >= 0 }?.let { return it }
-        }
-        return null
+        return synonyms.indexOfFirst { norm in it }.takeIf { it >= 0 }
     }
 
     /**
