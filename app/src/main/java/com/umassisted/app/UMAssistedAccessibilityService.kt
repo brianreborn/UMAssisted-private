@@ -47,6 +47,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // === Alpha tuning constants (easy to adjust during dev) ===
         const val SWEEP_DWELL_MS = 1350L          // human-comprehension hover time per facility
         const val SWEEP_INTER_HOVER_PAUSE_MS = 220L
+        const val SWEEP_SLIDE_MS = 260L        // travel between facilities, human-paced (REQ-A6)
+        const val SWEEP_RELEASE_MS = 180L      // slide clear of the row before lifting
+        const val SWEEP_RELEASE_FRAC = 0.12f   // how far clear, as a fraction of window height
         const val LIST_SCROLL_DURATION_MS = 520L  // human-scale vertical drag for race lists etc. (REQ-A16)
 
         // Simple in-memory state (alpha)
@@ -596,91 +599,116 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     return@post
                 }
 
-                var index = 0
-                fun hoverNext() {
-                    if (index >= positions.size) {
-                        Log.i(TAG, "Training sweep pass complete (5 hovers)")
-                        // After the hover pass, if sweep is still armed, do one list scroll
-                        // (REQ-A16: list auto-scroll behavior when sweep toggle is on).
-                        // Still driven by the initial explicit command; no self-loop.
-                        if (sweepCanContinue(myGen)) {
-                            handler.postDelayed({
-                                if (sweepCanContinue(myGen)) {
-                                    performListScrollOnce(directionDown = true)
-                                }
-                            }, 220)
+                // ONE continuous gesture: the finger goes down once, slides between
+                // facilities, dwells on each, and only lifts after sliding clear of the
+                // row. Previously each facility got its own stroke, and a stroke ends by
+                // lifting the finger where it is — Unity fires a button on pointer-up
+                // inside its bounds, so a "dwell" was just a slow click and every
+                // facility was being committed in turn. Sliding off before release is
+                // how a person previews without committing, and is what makes this a
+                // preview rather than a selection (REQ-A9: hover, never confirm).
+                val labels = arrayOf("Speed", "Stamina", "Power", "Guts", "Wit")
 
-                            // Optional post-sweep capture for logging / replay seeding
-                            handler.postDelayed({
-                                if (sweepCanContinue(myGen)) {
-                                    captureAndAnalyzeScreen { _, _ -> /* just log */ }
-                                }
-                            }, 900)
-                        }
-                        return
+                // A dwell is a stroke that barely moves. It is not a zero-length path:
+                // a single moveTo is an empty contour and not a valid stroke.
+                fun dwellPath(px: Int, py: Int) = Path().apply {
+                    moveTo(px.toFloat(), py.toFloat())
+                    lineTo(px + 1f, py.toFloat())
+                }
+
+                var elapsed = 0L
+                val strokes = mutableListOf<GestureDescription.StrokeDescription>()
+
+                val (x0, y0) = positions[0]
+                var current = GestureDescription.StrokeDescription(
+                    dwellPath(x0, y0), 0L, SWEEP_DWELL_MS, true
+                )
+                strokes += current
+                elapsed += SWEEP_DWELL_MS
+
+                for (i in 1 until positions.size) {
+                    val (ax, ay) = positions[i - 1]
+                    val (bx, by) = positions[i]
+                    val slide = Path().apply {
+                        moveTo(ax.toFloat(), ay.toFloat())
+                        lineTo(bx.toFloat(), by.toFloat())
                     }
-                    if (!sweepCanContinue(myGen)) {
-                        Log.i(TAG, "Sweep stopped by user, scope exit, or superseded command")
-                        return
-                    }
+                    current = current.continueStroke(slide, elapsed, SWEEP_SLIDE_MS, true)
+                    strokes += current
+                    elapsed += SWEEP_SLIDE_MS
 
-                    val (x, yy) = positions[index]
-                    val rect = Rect(x - 70, yy - 45, x + 70, yy + 45)
-                    Log.i(TAG, "Sweep hover ${index + 1}/5")
+                    current = current.continueStroke(dwellPath(bx, by), elapsed, SWEEP_DWELL_MS, true)
+                    strokes += current
+                    elapsed += SWEEP_DWELL_MS
+                }
 
-                    val cx = rect.centerX().toFloat()
-                    val cy = rect.centerY().toFloat()
+                // Slide clear of the facility row, then lift. Releasing here cancels the
+                // press instead of committing whichever facility we ended on.
+                val (lx, ly) = positions.last()
+                val releaseY = (ly - win.height() * SWEEP_RELEASE_FRAC).toInt()
+                val releasePath = Path().apply {
+                    moveTo(lx.toFloat(), ly.toFloat())
+                    lineTo(lx.toFloat(), releaseY.toFloat())
+                }
+                current = current.continueStroke(releasePath, elapsed, SWEEP_RELEASE_MS, false)
+                strokes += current
+                elapsed += SWEEP_RELEASE_MS
 
-                    val dispatched = dispatchGuarded(
-                        gen = myGen,
-                        points = listOf(cx to cy),
-                        what = "sweep hover ${index + 1}/5",
-                        build = {
-                            val path = Path().apply { moveTo(cx, cy) }
-                            GestureDescription.Builder()
-                                .addStroke(GestureDescription.StrokeDescription(path, 0, SWEEP_DWELL_MS))
-                                .build()
-                        },
-                        callback = object : GestureResultCallback() {
+                val maxStrokes = GestureDescription.getMaxStrokeCount()
+                Log.i(
+                    TAG,
+                    "Sweep gesture: ${strokes.size} strokes (max $maxStrokes), " +
+                        "${elapsed}ms total (max ${GestureDescription.getMaxGestureDuration()}ms)"
+                )
+                if (strokes.size > maxStrokes) {
+                    Log.e(TAG, "Sweep aborted: ${strokes.size} strokes exceeds platform max $maxStrokes")
+                    return@post
+                }
+
+                // Every point is bounds-checked before anything is dispatched (REQ-SF7).
+                val allPoints = positions.map { (px, py) -> px.toFloat() to py.toFloat() } +
+                    listOf(lx.toFloat() to releaseY.toFloat())
+
+                dispatchGuarded(
+                    gen = myGen,
+                    points = allPoints,
+                    what = "training sweep (continuous, ${positions.size} facilities)",
+                    build = {
+                        val b = GestureDescription.Builder()
+                        strokes.forEach { b.addStroke(it) }
+                        b.build()
+                    },
+                    callback = object : GestureResultCallback() {
                         override fun onCompleted(gestureDescription: GestureDescription) {
-                            val fac = arrayOf("Speed", "Stamina", "Power", "Guts", "Wit")[index]
-                            Log.i(TAG, "Sweep hover completed on $fac position")
-
-                            // Post-hover capture (explicit sweep command still in progress).
-                            // This populates lastOcrText / lastMatchReason and logs recognizable
-                            // facility context for later vision work (no automation side-effect).
+                            Log.i(TAG, "Sweep gesture completed (finger lifted clear of the row)")
                             if (sweepCanContinue(myGen)) {
                                 handler.postDelayed({
                                     if (sweepCanContinue(myGen)) {
-                                        captureAndAnalyzeScreen { txt, _ ->
-                                            val hit = listOf("Speed", "Stamina", "Power", "Guts", "Wit", "energy", "failure")
-                                                .firstOrNull { txt.contains(it, ignoreCase = true) }
-                                            if (hit != null) Log.i(TAG, "Post-hover OCR hint for $fac: saw '$hit'")
-                                        }
+                                        captureAndAnalyzeScreen { _, _ -> }
                                     }
-                                }, 180)
+                                }, 250)
                             }
-
-                            index++
-                            // Live sweepEnabled/isInUma are re-checked at the top of the next
-                            // hoverNext() call itself; only the overlap guard is needed here.
-                            if (myGen == actionGeneration) handler.postDelayed({ hoverNext() }, SWEEP_INTER_HOVER_PAUSE_MS)
                         }
 
                         override fun onCancelled(gestureDescription: GestureDescription) {
-                            Log.w(TAG, "Gesture cancelled during sweep")
+                            Log.w(TAG, "Sweep gesture cancelled")
                         }
-                        }
-                    )
-
-                    if (!dispatched) {
-                        Log.w(TAG, "Failed to dispatch hover gesture")
-                        index++
-                        if (myGen == actionGeneration) handler.postDelayed({ hoverNext() }, 300)
                     }
-                }
+                )
 
-                hoverNext()
+                // Log what is under the finger at each dwell, for corpus/vision work.
+                // Read-only; no input is dispatched from here.
+                var mark = 0L
+                for (i in positions.indices) {
+                    val at = mark + SWEEP_DWELL_MS / 2
+                    val label = labels.getOrElse(i) { "facility$i" }
+                    handler.postDelayed({
+                        if (sweepCanContinue(myGen)) {
+                            Log.i(TAG, "Sweep dwelling on $label")
+                        }
+                    }, at)
+                    mark += SWEEP_DWELL_MS + SWEEP_SLIDE_MS
+                }
             }
             Unit
         }
