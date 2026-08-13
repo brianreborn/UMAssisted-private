@@ -91,16 +91,44 @@ class UMAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Service connected")
         instance = this
         startForegroundNotification()
+
+        // Establish initial foreground state here rather than waiting for an event.
+        // Accessibility events report *changes*; they are not a substitute for reading
+        // current state at startup. If the service starts while Umamusume is already
+        // foreground and the screen is static (a modal, a paused career, an idle
+        // menu), no window-state-change event is guaranteed to arrive, so isInUma
+        // would stay false and the always-visible kill switches (REQ-A7) would never
+        // appear — the user would have to switch apps and back to get them, with no
+        // indication why. This matters most on an OS-initiated rebind, which happens
+        // outside the user's control and mid-session (observed repeatedly during the
+        // FOREGROUND_SERVICE crash loop this build fixed).
+        //
+        // Posted with a short delay because rootInActiveWindow isn't reliably
+        // populated at the instant onServiceConnected runs.
+        handler.postDelayed({ updateForegroundState() }, 300)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        // REQ-SF3: isInUma must reflect whether Umamusume is genuinely the *foreground*
-        // app right now, not merely the source package of some incoming event. The
-        // packageNames filter in accessibility_service_config.xml only restricts which
-        // package events are delivered FROM — a backgrounded Uma process can still emit
-        // window-content-changed events (cached activity, notification, etc.) while a
-        // different app is actually on screen. rootInActiveWindow reflects the window
-        // the system currently considers active, which is what "foreground" means here.
+        updateForegroundState()
+
+        // Alpha: we do not auto-react on every event.
+        // Real work is driven by explicit user commands (sweep, voice, or manual capture).
+        // We can add lightweight heuristics later (e.g. detect training view changes).
+    }
+
+    /**
+     * Single source of truth for "is Umamusume the foreground app", driven both by
+     * incoming accessibility events and by service connect.
+     *
+     * REQ-SF3: isInUma must reflect whether Umamusume is genuinely the *foreground*
+     * app right now, not merely the source package of some incoming event. The
+     * packageNames filter in accessibility_service_config.xml only restricts which
+     * package events are delivered FROM — a backgrounded Uma process can still emit
+     * window-content-changed events (cached activity, notification, etc.) while a
+     * different app is actually on screen. rootInActiveWindow reflects the window
+     * the system currently considers active, which is what "foreground" means here.
+     */
+    private fun updateForegroundState() {
         val activePkg = rootInActiveWindow?.packageName?.toString()
         val nowInUma = activePkg == TARGET_PACKAGE
 
@@ -124,10 +152,6 @@ class UMAccessibilityService : AccessibilityService() {
         // foreground, not gated behind opening MainActivity — MainActivity is a
         // separate backgrounded app the whole time Uma is on screen.
         if (!wasInUma) showOverlay() else refreshOverlay()
-
-        // Alpha: we do not auto-react on every event.
-        // Real work is driven by explicit user commands (sweep, voice, or manual capture).
-        // We can add lightweight heuristics later (e.g. detect training view changes).
     }
 
     override fun onInterrupt() {
