@@ -1,6 +1,24 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+}
+
+// Release signing — local, git-ignored keystore.properties (same pattern and
+// graceful degradation as japanglify): absent on a machine => assembleRelease
+// still succeeds, it just produces unsigned APKs.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+// ABI splits are for real releases only (see the `splits` block below). Detected
+// from the requested task names, since `splits` is variant-agnostic in AGP and
+// would otherwise fragment debug builds too.
+def releaseSplitsEnabled = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains('release')
 }
 
 // Cribbed/adapted from japanglify/app/build.gradle.kts
@@ -26,10 +44,40 @@ android {
         versionName '1.0-alpha'
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                storeFile rootProject.file(keystoreProperties.getProperty('storeFile'))
+                storePassword keystoreProperties.getProperty('storePassword')
+                keyAlias keystoreProperties.getProperty('keyAlias')
+                keyPassword keystoreProperties.getProperty('keyPassword')
+            }
+        }
+    }
+
+    // Per-ABI splits so a real release ships a *set* of APKs instead of one
+    // ~50MB universal blob — most of that weight is ML Kit's native OCR libs,
+    // which are per-architecture. universalApk stays on for easy sideloading.
+    //
+    // Release-only on purpose: `splits` otherwise applies to every variant, which
+    // replaces the single app-debug.apk with four split APKs and slows the
+    // edit->install->test loop. Debug keeps one predictable app-debug.apk.
+    splits {
+        abi {
+            enable releaseSplitsEnabled
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            universalApk true
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
         debug {
             minifyEnabled false

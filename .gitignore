@@ -4,12 +4,13 @@
 /.idea/
 .DS_Store
 **/build/
-!app/build/outputs/apk/debug/
-app/build/outputs/apk/debug/*
-!app/build/outputs/apk/debug/app-debug.apk
 /captures/
 .externalNativeBuild/
 .cxx/
+# Built APKs are never committed — they bloat history on every build (this is
+# how ~547MB of APKs ended up in the public repo). Release builds are published
+# as GitHub Release assets instead; see scripts/release.sh.
+*.apk
 *.ap_
 *.aab
 *.dex
@@ -27,3 +28,6 @@ sdk/
 *.keystore.jks
 *.jks
 *.keystore
+
+# Release staging output (scripts/release.sh) — published as GH Release assets.
+/dist/
