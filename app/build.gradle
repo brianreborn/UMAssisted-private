@@ -51,6 +51,12 @@ android {
                 storePassword keystoreProperties.getProperty('storePassword')
                 keyAlias keystoreProperties.getProperty('keyAlias')
                 keyPassword keystoreProperties.getProperty('keyPassword')
+                // v1 is unnecessary at minSdk 30. v3 is opt-in and enables signing-key
+                // *rotation* later — worth having, since losing this keystore otherwise
+                // permanently blocks updates to already-installed builds.
+                enableV1Signing false
+                enableV2Signing true
+                enableV3Signing true
             }
         }
     }
