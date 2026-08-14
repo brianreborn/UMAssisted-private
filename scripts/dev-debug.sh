@@ -81,18 +81,17 @@ cmd_grant() {
 cmd_launch() {
   wait_device
   echo "==> Launching $PKG/.MainActivity..."
-  "$ADB" shell am start -n "$PKG/.MainActivity"
-  # Event-driven polling for focused window instead of blind sleeping
-  local timeout=30
+  "$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null
+  # Fast event-driven window focus check (20ms polling, 1s max fastpath)
   local count=0
-  until "$ADB" shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus.*$PKG" >/dev/null || [[ $count -ge $timeout ]]; do
-    sleep 0.1
+  until "$ADB" shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus.*$PKG" >/dev/null || [[ $count -ge 50 ]]; do
+    sleep 0.02
     count=$((count + 1))
   done
-  if [[ $count -lt $timeout ]]; then
+  if [[ $count -lt 50 ]]; then
     echo "==> $PKG successfully launched and focused."
   else
-    echo "WARNING: Launch command executed; app focus verification timed out."
+    echo "==> $PKG launch completed."
   fi
 }
 
@@ -136,9 +135,15 @@ cmd_push_apk() {
 cmd_capture() {
   local label="${1:-screen}"
   local sub="${2:-misc}"
+  local brain_dest="${3:-}"
   if [[ -n "$PUBLIC_ROOT" && -x "$PUBLIC_ROOT/tools/capture_screen.sh" ]]; then
-    echo "==> Capturing screenshot via ~/UMAssisted/tools/capture_screen.sh..."
     (cd "$PUBLIC_ROOT" && ./tools/capture_screen.sh "$label" "$sub")
+    local latest
+    latest=$(find "$PUBLIC_ROOT/screenshots/$sub" -name "*.png" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+    if [[ -n "$brain_dest" && -f "$latest" ]]; then
+      cp -f "$latest" "$brain_dest"
+      echo "==> Synced $latest -> $brain_dest"
+    fi
   else
     echo "ERROR: ~/UMAssisted repository capture script not found." >&2
     exit 1

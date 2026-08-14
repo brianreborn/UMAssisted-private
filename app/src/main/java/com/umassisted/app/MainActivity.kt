@@ -1,7 +1,9 @@
 package com.umassisted.app
 
+import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,6 +19,8 @@ import android.widget.TextView
 import android.widget.ToggleButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 
 /**
  * Minimal launcher + control surface for 1.0 alpha.
@@ -27,6 +31,10 @@ import androidx.appcompat.widget.SwitchCompat
  * - Run Training Sweep (explicit user command, never auto)
  */
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val RECORD_AUDIO_REQUEST_CODE = 1001
+    }
 
     private lateinit var statusText: TextView
     private lateinit var lastOcrText: TextView
@@ -131,8 +139,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         voiceSwitch.setOnCheckedChangeListener { _, isChecked ->
-            UMAssistedAccessibilityService.voiceEnabled = isChecked
-            UMAssistedAccessibilityService.instance?.setVoiceEnabled(isChecked)
+            if (isChecked && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                // Manifest-declared but never actually requested before this fix — voice
+                // would otherwise hard-error-loop forever on ERROR_INSUFFICIENT_PERMISSIONS
+                // with no way for the user to ever grant it. Don't arm yet; wait for the
+                // result in onRequestPermissionsResult.
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), RECORD_AUDIO_REQUEST_CODE)
+            } else {
+                UMAssistedAccessibilityService.voiceEnabled = isChecked
+                UMAssistedAccessibilityService.instance?.setVoiceEnabled(isChecked)
+            }
         }
 
         captureButton.setOnClickListener {
@@ -427,6 +443,9 @@ class MainActivity : AppCompatActivity() {
         voiceMuteChimeSwitch.isChecked = UserSettings.getVoiceMuteChimeEnabled()
         voiceMuteChimeSwitch.setOnCheckedChangeListener { _, isChecked ->
             UserSettings.setVoiceMuteChimeEnabled(isChecked)
+            // Previously only took effect on the next full start()/stop() cycle —
+            // apply it immediately if a session is already armed.
+            UMAssistedAccessibilityService.instance?.applyVoiceChimeMuteLive()
         }
 
         wireLongSetting(
@@ -571,6 +590,19 @@ class MainActivity : AppCompatActivity() {
             } else {
                 statusText.text = "Enter a number"
             }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != RECORD_AUDIO_REQUEST_CODE) return
+        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            UMAssistedAccessibilityService.voiceEnabled = true
+            UMAssistedAccessibilityService.instance?.setVoiceEnabled(true)
+        } else {
+            voiceSwitch.isChecked = false
+            statusText.text = "Voice needs microphone permission"
         }
     }
 

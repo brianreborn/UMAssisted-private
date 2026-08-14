@@ -30,7 +30,7 @@ object UserSettings {
      * knowing the mic is live) more than they want it silenced.
      */
     fun getVoiceMuteChimeEnabled(): Boolean =
-        prefs.getBoolean("voice_mute_chime_enabled", false)
+        prefs.getBoolean("voice_mute_chime_enabled", true)
 
     fun setVoiceMuteChimeEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("voice_mute_chime_enabled", enabled).apply()
@@ -58,6 +58,23 @@ object UserSettings {
     fun setVoiceSilenceTimeoutMs(ms: Long) {
         val bounded = ms.coerceIn(2000L, 60000L)
         prefs.edit().putLong("voice_silence_timeout_ms", bounded).apply()
+    }
+
+    /**
+     * Minimum sustained speech duration (in milliseconds) required before the
+     * recognizer starts utterance evaluation — passed as
+     * EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS. User-configurable: prevents
+     * mic startup transients or low ambient noise floors from immediately
+     * triggering onBeginningOfSpeech. Bounds: [0, 2000] ms. Default 300ms.
+     */
+    fun getVoiceMinSpeechLengthMs(): Long {
+        val stored = prefs.getLong("voice_min_speech_length_ms", -1L)
+        return if (stored >= 0) stored else 300L
+    }
+
+    fun setVoiceMinSpeechLengthMs(ms: Long) {
+        val bounded = ms.coerceIn(0L, 2000L)
+        prefs.edit().putLong("voice_min_speech_length_ms", bounded).apply()
     }
 
     /**
@@ -90,7 +107,7 @@ object UserSettings {
      */
     fun getSweepPeriodMs(): Long {
         val stored = prefs.getLong("sweep_period_ms", -1L)
-        return if (stored > 0) stored else 8000L
+        return if (stored > 0) stored else 2500L
     }
 
     fun setSweepPeriodMs(ms: Long) {
@@ -122,9 +139,9 @@ object UserSettings {
      *
      * - LINEAR: constant speed across every facility, closest to a plain
      *   human swipe with no lingering.
-     * - SINUSOIDAL (default): speed follows sin(pi*u) per gap — slows near
+     * - SINUSOIDAL: speed follows sin(pi*u) per gap — slows near
      *   each facility, fastest in the open space between them.
-     * - DECELERATING_PASSES: multiple sinusoidal passes back-to-back
+     * - DECELERATING_PASSES (default): multiple sinusoidal passes back-to-back
      *   (REQ-A5-safe: a fixed, bounded count, not a loop), each slower
      *   than the last — a quick overview pass first, then progressively
      *   more time to look on each subsequent pass.
@@ -134,7 +151,7 @@ object UserSettings {
     fun getSweepPacingMode(): SweepPacingMode {
         val stored = prefs.getString("sweep_pacing_mode", null)
         return stored?.let { runCatching { SweepPacingMode.valueOf(it) }.getOrNull() }
-            ?: SweepPacingMode.SINUSOIDAL
+            ?: SweepPacingMode.DECELERATING_PASSES
     }
 
     fun setSweepPacingMode(mode: SweepPacingMode) {
@@ -242,7 +259,7 @@ object UserSettings {
      */
     fun getVoiceConfirmWindowMs(): Long {
         val stored = prefs.getLong("voice_confirm_window_ms", -1L)
-        return if (stored > 0) stored else 5000L
+        return if (stored > 0) stored else 8000L
     }
 
     fun setVoiceConfirmWindowMs(ms: Long) {

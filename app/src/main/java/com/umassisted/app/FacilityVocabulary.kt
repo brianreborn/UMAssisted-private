@@ -41,7 +41,7 @@ object FacilityVocabulary {
     }
 
     /** REQ-A23/A24: dedicated continuation-signal phrase to restart the sweep, distinct from a facility name. */
-    private val heartbeatPhrases = setOf("continue", "keep going")
+    private val heartbeatPhrases = setOf("continue", "keep going", "resume", "go", "keep moving", "continue sweep")
 
     fun isHeartbeat(candidates: List<String>): Boolean =
         candidates.any { normalize(it) in heartbeatPhrases }

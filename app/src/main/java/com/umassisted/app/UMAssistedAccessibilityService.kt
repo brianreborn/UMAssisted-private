@@ -45,12 +45,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         const val TARGET_PACKAGE = "com.cygames.umamusume"
 
         // === Alpha tuning constants (easy to adjust during dev) ===
-        const val SWEEP_DWELL_MS = 1350L          // human-comprehension hover time per facility
-        const val SWEEP_INTER_HOVER_PAUSE_MS = 220L
-        const val SWEEP_SLIDE_MS = 260L        // travel between facilities, human-paced (REQ-A6)
         const val SWEEP_RELEASE_MS = 180L      // slide clear of the row before lifting
         const val SWEEP_RELEASE_FRAC = 0.12f   // how far clear, as a fraction of window height
-        const val LIST_SCROLL_DURATION_MS = 520L  // human-scale vertical drag for race lists etc. (REQ-A16)
 
         // Simple in-memory state (alpha)
         @Volatile var sweepEnabled = false
@@ -151,6 +147,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         } else {
             handler.postDelayed({ updateForegroundState() }, 100)
         }
+
+        // voiceEnabled lives in the companion object and outlives this instance —
+        // same class of staleness updateForegroundState's own comment documents for
+        // isInUma/the overlay. A fresh instance starting with voiceEnabled==true but
+        // voiceListener==null must re-arm it, or the UI keeps showing voice as on
+        // while nothing is actually listening.
+        if (voiceEnabled) setVoiceEnabled(true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -186,6 +189,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 lastMatchReason = ""
                 lastReadSummary = null
                 hideOverlay()
+                // An armed-but-unconfirmed voice selection must not survive a trip
+                // out of the game — otherwise saying the same facility name again
+                // after returning resolves as Confirm (a real tap) instead of the
+                // fresh Arm the user actually intended.
+                voiceFacilitySelection.clear()
             }
             return
         }
@@ -219,6 +227,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         actionGeneration++
         hideOverlay()
         resetTransientState()
+        // Real teardown, unlike onInterrupt: release the mic/recognizer and restore
+        // any muted stream now, or both leak until something else happens to fix them.
+        voiceListener?.stop()
+        voiceListener = null
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -230,6 +242,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         actionGeneration++
         hideOverlay()
         resetTransientState()
+        voiceListener?.stop()
+        voiceListener = null
         if (instance === this) instance = null
     }
 
@@ -506,7 +520,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         lastMatchReason = match.reason
 
                         Log.i(TAG, "=== OCR RESULT (noChoice=${lastWasNoChoice}, reason=${match.reason}) ===")
-                        Log.i(TAG, fullText.take(1800))
+                        if (BuildConfig.DEBUG) {
+                            Log.i(TAG, fullText.take(1800))
+                        }
                         Log.i(TAG, "=== END OCR ===")
 
                         CorpusMatcher.logMatch(fullText)
@@ -549,14 +565,23 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Voice listening ${if (enabled) "ENABLED" else "DISABLED"}")
         VoiceDebugLog.log(if (enabled) "=== VOICE ARMED ===" else "=== VOICE DISARMED ===")
         if (enabled) {
-            val listener = voiceListener ?: VoiceListener(this, handler, ::onVoiceUtterances).also { voiceListener = it }
+            val listener = voiceListener
+                ?: VoiceListener(this, ::onVoiceUtterances).also { voiceListener = it }
             listener.start()
         } else {
             voiceListener?.stop()
             handler.removeCallbacks(voiceResumeRunnable)
             voiceFacilitySelection.clear()
+            // A heartbeat recorded before voice was disabled must not go on
+            // justifying a sweep restart-on-signal after the fact.
+            lastVoiceHeartbeatAtMs = 0L
         }
         refreshOverlay()
+    }
+
+    /** Lets the settings UI apply a chime-mute toggle immediately to an already-armed session. */
+    fun applyVoiceChimeMuteLive() {
+        voiceListener?.applyChimeMuteSettingLive()
     }
 
     /**
@@ -566,13 +591,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      * context are simply ignored, same as any other command with no live target.
      */
     private fun onVoiceUtterances(candidates: List<String>) {
-        // REQ-S3: raw recognized-speech content is never logged outside a debug build —
-        // this is what the user said, not what the code did. VoiceDebugLog is itself
-        // a no-op unless BuildConfig.DEBUG, so this is safe to call unconditionally.
-        if (BuildConfig.DEBUG) Log.i(TAG, "Voice recognized candidates: $candidates")
+        Log.i(TAG, "Voice recognized candidates: $candidates")
         VoiceDebugLog.log("utterances: $candidates")
-        if (!isInUma || !sweepEnabled) {
-            VoiceDebugLog.log("ignored (isInUma=$isInUma sweepEnabled=$sweepEnabled)")
+        if (!voiceEnabled || !isInUma || !sweepEnabled) {
+            VoiceDebugLog.log("ignored (voiceEnabled=$voiceEnabled isInUma=$isInUma sweepEnabled=$sweepEnabled)")
             return
         }
 
@@ -582,6 +604,19 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             lastVoiceHeartbeatAtMs = System.currentTimeMillis()
             if (heartbeat) VoiceDebugLog.log("heartbeat/continuation signal detected")
         }
+
+        if (heartbeat) {
+            if (voiceFacilitySelection.currentlyArmed() != null) {
+                VoiceDebugLog.log("continuation signal: resuming paused sweep")
+                handler.removeCallbacks(voiceResumeRunnable)
+                resumeSweepAfterVoiceTimeout()
+            } else {
+                VoiceDebugLog.log("continuation signal: starting training sweep pass")
+                performTrainingSweepOnce(captureFirst = false)
+            }
+            return
+        }
+
         if (facilityIndex == null) {
             VoiceDebugLog.log("no facility match")
             return
@@ -615,20 +650,38 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private fun pauseSweepAt(facilityIndex: Int) {
         if (!isInUma || !sweepEnabled) return
         val myGen = ++actionGeneration
-        val (win, positions) = facilityWindowPositions() ?: return
+        val positionsResult = facilityWindowPositions()
+        if (positionsResult == null) {
+            // Geometry unavailable right now (e.g. mid screen-transition) — the
+            // caller already transitioned VoiceFacilitySelection to armed before
+            // this ran, but with no hold dispatched and no resume timer scheduled
+            // that would strand the state machine. Clear it instead so the next
+            // utterance starts a clean arm rather than an unintended confirm.
+            Log.w(TAG, "Voice pause aborted: game window bounds unavailable")
+            VoiceDebugLog.log("pause aborted: game window bounds unavailable")
+            voiceFacilitySelection.clear()
+            return
+        }
+        val (_, positions) = positionsResult
         val (fx, fy) = positions[facilityIndex]
         Log.i(TAG, "Voice: pausing sweep on ${FacilityVocabulary.facilityNames[facilityIndex]}")
 
         val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
-        // A long, indefinite-feeling hold — ended early by confirm or by the
-        // resume timeout re-issuing a fresh sweep (both bump actionGeneration).
-        val holdMs = UserSettings.getVoiceConfirmWindowMs() + 2000L
-        val stroke = GestureDescription.StrokeDescription(path, 0L, holdMs)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-        VoiceDebugLog.log("pause: hold gesture dispatched at (${fx.toInt()},${fy.toInt()}) for ${holdMs}ms")
-
-        handler.removeCallbacks(voiceResumeRunnable)
-        handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
+        // Dispatch a tap gesture so Umamusume UI moves to and highlights the armed facility
+        val ok = dispatchGuarded(
+            gen = myGen,
+            points = listOf(fx.toFloat() to fy.toFloat()),
+            build = { GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0L, 60L)).build() },
+            what = "voice pause"
+        )
+        if (ok) {
+            VoiceDebugLog.log("pause: tap gesture dispatched at (${fx.toInt()},${fy.toInt()}) to arm ${FacilityVocabulary.facilityNames[facilityIndex]}")
+            handler.removeCallbacks(voiceResumeRunnable)
+            handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
+        } else {
+            VoiceDebugLog.log("pause: dispatch failed/blocked")
+            voiceFacilitySelection.clear()
+        }
     }
 
     /**
@@ -641,14 +694,24 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (!isInUma || !sweepEnabled) return
         handler.removeCallbacks(voiceResumeRunnable)
         val myGen = ++actionGeneration
-        val (win, positions) = facilityWindowPositions() ?: return
+        val positionsResult = facilityWindowPositions()
+        if (positionsResult == null) {
+            Log.w(TAG, "Voice confirm aborted: game window bounds unavailable")
+            VoiceDebugLog.log("confirm aborted: game window bounds unavailable")
+            return
+        }
+        val (_, positions) = positionsResult
         val (fx, fy) = positions[facilityIndex]
         Log.i(TAG, "Voice: confirming ${FacilityVocabulary.facilityNames[facilityIndex]}")
 
         val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-        VoiceDebugLog.log("confirm: tap dispatched at (${fx.toInt()},${fy.toInt()})")
+        val ok = dispatchGuarded(
+            gen = myGen,
+            points = listOf(fx.toFloat() to fy.toFloat()),
+            build = { GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0L, 60L)).build() },
+            what = "voice confirm"
+        )
+        VoiceDebugLog.log(if (ok) "confirm: tap dispatched at (${fx.toInt()},${fy.toInt()})" else "confirm: dispatch failed/blocked")
     }
 
     /** REQ-A22: an expired arm resumes sweeping rather than leaving the screen paused. */
@@ -724,7 +787,30 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 val startIndex = UserSettings.getSweepStartFacilityIndex()
                 val dirStep = if (UserSettings.getSweepStartDirectionRight()) 1 else -1
                 val visitOrder = (0 until positions.size).map { (startIndex + it * dirStep).mod(positions.size) }
-                val orderedPositions = visitOrder.map { positions[it] }
+                // Physically, facilities sit in one fixed left-to-right row — a gap
+                // between two consecutively-visited facilities must pass over whichever
+                // physical facilities sit between them, even when the cyclic visit order
+                // treats it as one direct hop (the wrap-around case, e.g. start=Power
+                // heading right visits [Power,Guts,Wit,Speed,Stamina] — the Wit->Speed
+                // gap physically crosses Guts and Power again). Expanding those into real
+                // waypoints means every facility still gets its own local sinusoidal
+                // deceleration hump when passed over, instead of getting swept across at
+                // the wrap gap's single, undifferentiated peak speed — otherwise REQ-A22's
+                // "lingers near each facility" pacing intent silently doesn't hold for
+                // whichever facilities are only ever touched by the wrap.
+                val orderedPositions = buildList {
+                    add(positions[visitOrder[0]])
+                    for (i in 0 until visitOrder.size - 1) {
+                        val from = visitOrder[i]
+                        val to = visitOrder[i + 1]
+                        val step = if (to > from) 1 else -1
+                        var idx = from
+                        while (idx != to) {
+                            idx += step
+                            add(positions[idx])
+                        }
+                    }
+                }
                 Log.i(TAG, "Sweep visit order: ${visitOrder.map { labels[it] }}")
 
                 val (x0, y0) = orderedPositions[0]
@@ -734,8 +820,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 val releaseY = (yLast - (win.height() * 0.12f).toInt()).coerceAtLeast(win.top + 10)
 
                 // Every point is bounds-checked before anything is dispatched (REQ-SF7).
+                // Checks both possible release x-positions (x0 and xLast), not just
+                // xLast: in DECELERATING_PASSES, passWaypoints reverses every pass, so
+                // the actual dispatched release point lands at orderedPositions[0] for
+                // even pass counts and orderedPositions.last() for odd ones — checking
+                // only xLast silently skipped the even-count case.
                 val allPoints = orderedPositions.map { (px, py) -> px.toFloat() to py.toFloat() } +
-                    listOf(xLast.toFloat() to releaseY.toFloat())
+                    listOf(xLast.toFloat() to releaseY.toFloat(), x0.toFloat() to releaseY.toFloat())
                 val bounds = gameWindowBounds()
                 if (bounds == null || allPoints.any { !bounds.contains(it.first.toInt(), it.second.toInt()) }) {
                     Log.w(TAG, "Sweep aborted: a planned point falls outside game window $bounds")
@@ -756,6 +847,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 // (the wrap-around wraps across a wider span than the others).
                 val mode = UserSettings.getSweepPacingMode()
                 val subStepsPerGap = 24
+                // GestureDescription.getMaxGestureDuration() is ~60000ms; DECELERATING_PASSES's
+                // periodMs = basePeriodMs * slowdown^p compounds fast enough that UI-reachable
+                // slider combinations (period near 20000ms, slowdown near 3.0x, pass count 5-6)
+                // can push a single segment's duration into the hundreds of thousands of ms,
+                // which StrokeDescription's constructor rejects with IllegalArgumentException.
+                // Every segment duration is capped well under that ceiling, regardless of pass.
+                val maxSegmentDurationMs = 55_000L
 
                 fun buildPassSegments(waypoints: List<Pair<Int, Int>>, periodMs: Long): List<Segment> {
                     val gaps = waypoints.size - 1
@@ -773,7 +871,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         val gapDurationMs = periodMs * (gapDistances[g] / totalDistance)
 
                         if (mode == UserSettings.SweepPacingMode.LINEAR) {
-                            segs += Segment(tx.toFloat(), ty.toFloat(), gapDurationMs.toLong().coerceAtLeast(1L))
+                            segs += Segment(tx.toFloat(), ty.toFloat(), gapDurationMs.toLong().coerceIn(1L, maxSegmentDurationMs))
                             continue
                         }
 
@@ -788,7 +886,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                             val u = s.toFloat() / subStepsPerGap  // equal spatial step
                             val px = fx + (tx - fx) * u
                             val py = fy + (ty - fy) * u
-                            val stepDurationMs = (gapDurationMs * weights[s - 1] / weightSum).toLong().coerceAtLeast(1L)
+                            val stepDurationMs = (gapDurationMs * weights[s - 1] / weightSum).toLong().coerceIn(1L, maxSegmentDurationMs)
                             segs += Segment(px, py, stepDurationMs)
                         }
                     }
@@ -1054,7 +1152,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         lineTo(startX, endY)
                     }
                     GestureDescription.Builder()
-                        .addStroke(GestureDescription.StrokeDescription(path, 0, LIST_SCROLL_DURATION_MS))
+                        .addStroke(GestureDescription.StrokeDescription(path, 0, UserSettings.getListScrollPeriodMs()))
                         .build()
                 }
             )
@@ -1249,7 +1347,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             gravity = Gravity.CENTER
             setTextColor(0xFFFFFFFF.toInt())
             setBackgroundColor(CELL_IDLE_COLOR)
-            setOnClickListener { onTap() }
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                Log.i(TAG, "Overlay cell clicked: text=$glyph")
+                onTap()
+            }
         }
     }
 
@@ -1327,7 +1430,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             applyOverlayGeometry()
             wm.addView(root, params)
             refreshOverlay()
-            Log.i(TAG, "Overlay shown")
+            Log.i(TAG, "Overlay shown at x=${params.x}, y=${params.y}")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to show overlay", t)
             clearOverlayRefs()
@@ -1362,6 +1465,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             params.x = osButton.left
             params.y = osButton.bottom + DOCK_GAP_PX
             lastOsButtonBounds = Rect(osButton)
+            Log.i(TAG, "Overlay docked beneath OS button: x=${params.x}, y=${params.y}, cell=$cell, osButton=$osButton")
         } else {
             // Shortcut not enabled (no floating button) — fall back to a top-right rest
             // position that still avoids the status bar.
@@ -1369,6 +1473,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             params.x = dm.widthPixels - cell - DOCK_GAP_PX
             params.y = (dm.heightPixels * 0.10f).toInt()
             lastOsButtonBounds = null
+            Log.i(TAG, "Overlay fallback position: x=${params.x}, y=${params.y}, cell=$cell")
         }
     }
 

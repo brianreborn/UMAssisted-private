@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -62,7 +63,6 @@ import android.util.Log
  */
 class VoiceListener(
     private val context: Context,
-    private val handler: Handler,
     private val onUtterances: (List<String>) -> Unit,
     /**
      * Called with each partial-results update; return true once the partial
@@ -75,9 +75,17 @@ class VoiceListener(
 ) {
     companion object {
         private const val TAG = "VoiceListener"
-        private const val MIN_RESTART_DELAY_MS = 600L
-        private const val HARD_ERROR_BACKOFF_MS = 2000L
+        private const val MIN_RESTART_DELAY_MS = 1200L
+        private const val HARD_ERROR_BACKOFF_MS = 2500L
     }
+
+    // Deliberately its OWN Handler, not the owning service's — voice's restart
+    // timer must survive housekeeping calls like AccessibilityService.onInterrupt()
+    // (a routine, frequent event) canceling the service's own pending gesture
+    // callbacks via handler.removeCallbacksAndMessages(null). Sharing a Handler
+    // here previously meant a routine onInterrupt() silently and permanently
+    // killed voice recognition with no error and no re-arm.
+    private val handler = Handler(Looper.getMainLooper())
 
     @Volatile private var armed = false
     private var recognizer: SpeechRecognizer? = null
@@ -90,15 +98,21 @@ class VoiceListener(
     private val listener = object : RecognitionListener {
         override fun onResults(results: Bundle) {
             val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (BuildConfig.DEBUG) Log.i(TAG, "STT decoded words: ${matches ?: emptyList<String>()}")
             VoiceDebugLog.log("RESULT: ${matches ?: emptyList<String>()}")
-            if (!matches.isNullOrEmpty()) onUtterances(matches)
+            // A result already in flight when stop() ran must not still act — armed
+            // is checked here, not just inside restartSoon, since delivery of a result
+            // is always async relative to when stop() can have been called.
+            if (armed && !matches.isNullOrEmpty()) onUtterances(matches)
             restartSoon(hardError = false)
         }
 
         override fun onError(error: Int) {
             val hard = error == SpeechRecognizer.ERROR_AUDIO ||
                 error == SpeechRecognizer.ERROR_CLIENT ||
-                error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
+                error == SpeechRecognizer.ERROR_NO_MATCH ||
+                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             Log.w(TAG, "Recognition error=$error hard=$hard")
             VoiceDebugLog.log("ERROR: code=$error hard=$hard")
             restartSoon(hardError = hard)
@@ -113,6 +127,9 @@ class VoiceListener(
         override fun onPartialResults(partialResults: Bundle?) {
             if (stoppedEarlyThisSession) return
             val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (!partial.isNullOrEmpty() && BuildConfig.DEBUG) {
+                Log.i(TAG, "STT partial decoded words: $partial")
+            }
             VoiceDebugLog.log("partial: ${partial ?: emptyList<String>()}")
             if (!partial.isNullOrEmpty() && isUnambiguousMatch(partial)) {
                 // stopListening() (not cancel()) lets the recognizer finalize normally —
@@ -133,6 +150,18 @@ class VoiceListener(
 
     fun start() {
         if (armed) return
+
+        // A missing RECORD_AUDIO grant is a static condition, not a transient one —
+        // starting anyway would just hit ERROR_INSUFFICIENT_PERMISSIONS and spin in
+        // the hard-error retry loop forever. Fail once, clearly, instead.
+        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "RECORD_AUDIO not granted — voice cannot start")
+            VoiceDebugLog.log("RECORD_AUDIO permission not granted — voice not started")
+            return
+        }
+
         armed = true
 
         // REQ-V2/REQ-S1: createSpeechRecognizer() picks a generic recognizer that may
@@ -172,6 +201,17 @@ class VoiceListener(
     }
 
     /**
+     * Re-applies the chime-mute setting immediately, for when the user flips it
+     * while a session is already armed — previously this only took effect on the
+     * next full start()/stop() cycle, so the UI and actual mute state could
+     * disagree until voice was toggled off and back on.
+     */
+    fun applyChimeMuteSettingLive() {
+        if (!armed) return
+        if (UserSettings.getVoiceMuteChimeEnabled()) muteSystemStreamChime() else restoreSystemStreamChime()
+    }
+
+    /**
      * Silences the recognition service's own start/end tone for as long as voice
      * is armed. STREAM_SYSTEM carries that UX cue on the engines observed so far,
      * not game audio (typically STREAM_MUSIC), so this doesn't touch playback.
@@ -208,8 +248,8 @@ class VoiceListener(
         stoppedEarlyThisSession = false
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            // Short command-style bias, not dictation — closer to a single facility name.
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH)
+            // General free-form speech model for on-device recognition of single-word facility commands.
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             // Needed to receive onPartialResults at all, so an unambiguous match can
@@ -222,10 +262,17 @@ class VoiceListener(
             // not treat ordinary silence as a reason to cycle it. User-configurable
             // (UserSettings.getVoiceSilenceTimeoutMs) since some on-device engines
             // ignore this and hold to their own fixed floor regardless of the value.
-            val silenceTimeoutMs = UserSettings.getVoiceSilenceTimeoutMs()
+            val silenceTimeoutMs = UserSettings.getVoiceSilenceTimeoutMs().toInt()
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 0L)
+            val minSpeechMs = UserSettings.getVoiceMinSpeechLengthMs().toInt()
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minSpeechMs)
+        }
+
+        try {
+            r.cancel()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Cancel prior session failed", t)
         }
 
         try {

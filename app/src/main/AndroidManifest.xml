@@ -3,10 +3,12 @@
 
     <!-- No INTERNET permission (REQ-S1) -->
 
-    <!-- Required for the AccessibilityService's startForeground() call (REQ-A7 always-on
-         kill-switch notification). Without these two, onServiceConnected() throws
-         SecurityException on every bind attempt and the OS marks the service "crashed",
-         permanently refusing to rebind it until manually toggled off/on in Settings. -->
+    <!-- Required for the AccessibilityService's startForeground() call — an Android OS
+         mechanic for foreground services (keeps this service alive/prioritized), NOT
+         related to REQ-A7's kill switch (that's the on-screen overlay, a separate
+         mechanism). Without these two, onServiceConnected() throws SecurityException on
+         every bind attempt and the OS marks the service "crashed", permanently refusing
+         to rebind it until manually toggled off/on in Settings. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
