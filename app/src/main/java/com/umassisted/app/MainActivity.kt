@@ -1,12 +1,16 @@
 package com.umassisted.app
 
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -58,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var voiceSilenceTimeoutSeekBar: SeekBar
     private lateinit var voiceSilenceTimeoutEditText: EditText
     private lateinit var voiceSilenceTimeoutSetButton: Button
+    private lateinit var voiceDebugLogButton: Button
 
     // Human-meaningful grid the period slider snaps to, rather than every raw
     // millisecond — matches how a person actually thinks about pacing ("about
@@ -104,6 +109,14 @@ class MainActivity : AppCompatActivity() {
         voiceSilenceTimeoutSeekBar = findViewById(R.id.voiceSilenceTimeoutSeekBar)
         voiceSilenceTimeoutEditText = findViewById(R.id.voiceSilenceTimeoutEditText)
         voiceSilenceTimeoutSetButton = findViewById(R.id.voiceSilenceTimeoutSetButton)
+        voiceDebugLogButton = findViewById(R.id.voiceDebugLogButton)
+
+        // REQ-S3: the whole live debug log surface only exists in debug builds —
+        // absent (not just non-functional) in anything that could ship.
+        voiceDebugLogButton.visibility = if (BuildConfig.DEBUG) View.VISIBLE else View.GONE
+        if (BuildConfig.DEBUG) {
+            voiceDebugLogButton.setOnClickListener { showVoiceDebugLogDialog() }
+        }
 
         // Initialize from current service state
         sweepSwitch.isChecked = UMAssistedAccessibilityService.sweepEnabled
@@ -422,6 +435,53 @@ class MainActivity : AppCompatActivity() {
             getter = { UserSettings.getVoiceSilenceTimeoutMs() },
             setter = { UserSettings.setVoiceSilenceTimeoutMs(it) }
         )
+    }
+
+    /**
+     * Live-updating view of VoiceDebugLog — high-level voice-pipeline events
+     * (sessions, results, matches, arm/confirm, restarts) without needing
+     * `adb logcat` at all. Debug-build only (REQ-S3): the button that opens
+     * this is gone in release builds, and VoiceDebugLog.log() itself is a
+     * no-op there, so this dialog would just show "(empty)" even if reached.
+     * Polls rather than pushing updates — simplest correct option for a
+     * short-lived debug dialog, not worth a proper observer for this.
+     */
+    private fun showVoiceDebugLogDialog() {
+        val textView = TextView(this).apply {
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(24, 24, 24, 24)
+        }
+        val scroll = ScrollView(this).apply { addView(textView) }
+
+        val dialogHandler = Handler(Looper.getMainLooper())
+        var polling = true
+        val refresh: () -> Unit = refresh@{
+            val entries = VoiceDebugLog.snapshot()
+            textView.text = if (entries.isEmpty()) {
+                "(empty — enable Voice Listen and speak)"
+            } else {
+                entries.joinToString("\n") { e -> "[${"%6.1f".format(e.atMs / 1000.0)}s] ${e.text}" }
+            }
+            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        }
+        val pollRunnable = object : Runnable {
+            override fun run() {
+                if (!polling) return
+                refresh()
+                dialogHandler.postDelayed(this, 400)
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Voice Debug Log")
+            .setView(scroll)
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Clear") { _, _ -> VoiceDebugLog.clear(); refresh() }
+            .setOnDismissListener { polling = false; dialogHandler.removeCallbacks(pollRunnable) }
+            .show()
+
+        pollRunnable.run()
     }
 
     /**

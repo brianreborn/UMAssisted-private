@@ -547,6 +547,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     fun setVoiceEnabled(enabled: Boolean) {
         voiceEnabled = enabled
         Log.i(TAG, "Voice listening ${if (enabled) "ENABLED" else "DISABLED"}")
+        VoiceDebugLog.log(if (enabled) "=== VOICE ARMED ===" else "=== VOICE DISARMED ===")
         if (enabled) {
             val listener = voiceListener ?: VoiceListener(this, handler, ::onVoiceUtterances).also { voiceListener = it }
             listener.start()
@@ -566,21 +567,41 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      */
     private fun onVoiceUtterances(candidates: List<String>) {
         // REQ-S3: raw recognized-speech content is never logged outside a debug build —
-        // this is what the user said, not what the code did.
+        // this is what the user said, not what the code did. VoiceDebugLog is itself
+        // a no-op unless BuildConfig.DEBUG, so this is safe to call unconditionally.
         if (BuildConfig.DEBUG) Log.i(TAG, "Voice recognized candidates: $candidates")
-        if (!isInUma || !sweepEnabled) return
+        VoiceDebugLog.log("utterances: $candidates")
+        if (!isInUma || !sweepEnabled) {
+            VoiceDebugLog.log("ignored (isInUma=$isInUma sweepEnabled=$sweepEnabled)")
+            return
+        }
 
         val facilityIndex = FacilityVocabulary.matchFacility(candidates)
-        if (facilityIndex != null || FacilityVocabulary.isHeartbeat(candidates)) {
+        val heartbeat = FacilityVocabulary.isHeartbeat(candidates)
+        if (facilityIndex != null || heartbeat) {
             lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+            if (heartbeat) VoiceDebugLog.log("heartbeat/continuation signal detected")
         }
-        if (facilityIndex == null) return
+        if (facilityIndex == null) {
+            VoiceDebugLog.log("no facility match")
+            return
+        }
+        VoiceDebugLog.log("matched facility: ${FacilityVocabulary.facilityNames[facilityIndex]}")
 
         val now = System.currentTimeMillis()
         when (val action = voiceFacilitySelection.onFacilityUtterance(facilityIndex, now)) {
-            is VoiceFacilitySelection.Action.Arm -> pauseSweepAt(action.facilityIndex)
-            is VoiceFacilitySelection.Action.ReArm -> pauseSweepAt(action.facilityIndex)
-            is VoiceFacilitySelection.Action.Confirm -> confirmFacilitySelection(action.facilityIndex)
+            is VoiceFacilitySelection.Action.Arm -> {
+                VoiceDebugLog.log("ARM: ${FacilityVocabulary.facilityNames[action.facilityIndex]}")
+                pauseSweepAt(action.facilityIndex)
+            }
+            is VoiceFacilitySelection.Action.ReArm -> {
+                VoiceDebugLog.log("RE-ARM: ${FacilityVocabulary.facilityNames[action.facilityIndex]}")
+                pauseSweepAt(action.facilityIndex)
+            }
+            is VoiceFacilitySelection.Action.Confirm -> {
+                VoiceDebugLog.log("CONFIRM: ${FacilityVocabulary.facilityNames[action.facilityIndex]}")
+                confirmFacilitySelection(action.facilityIndex)
+            }
         }
     }
 
@@ -604,6 +625,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val holdMs = UserSettings.getVoiceConfirmWindowMs() + 2000L
         val stroke = GestureDescription.StrokeDescription(path, 0L, holdMs)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        VoiceDebugLog.log("pause: hold gesture dispatched at (${fx.toInt()},${fy.toInt()}) for ${holdMs}ms")
 
         handler.removeCallbacks(voiceResumeRunnable)
         handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
@@ -626,6 +648,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
         val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        VoiceDebugLog.log("confirm: tap dispatched at (${fx.toInt()},${fy.toInt()})")
     }
 
     /** REQ-A22: an expired arm resumes sweeping rather than leaving the screen paused. */
@@ -633,6 +656,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         voiceFacilitySelection.clear()
         if (isInUma && sweepEnabled) {
             Log.i(TAG, "Voice: confirm window expired, resuming sweep")
+            VoiceDebugLog.log("confirm window expired — resuming sweep")
             performTrainingSweepOnce(captureFirst = false)
         }
     }

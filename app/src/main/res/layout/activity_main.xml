@@ -364,7 +364,15 @@
             android:id="@+id/voiceSilenceTimeoutSeekBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:max="58000" />
+            android:max="58000"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Debug-build only (REQ-S3): visibility set to GONE at runtime in release. -->
+        <Button
+            android:id="@+id/voiceDebugLogButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Voice Debug Log" />
 
     </LinearLayout>
 

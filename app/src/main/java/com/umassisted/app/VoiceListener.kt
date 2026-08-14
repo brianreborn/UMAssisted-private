@@ -90,6 +90,7 @@ class VoiceListener(
     private val listener = object : RecognitionListener {
         override fun onResults(results: Bundle) {
             val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            VoiceDebugLog.log("RESULT: ${matches ?: emptyList<String>()}")
             if (!matches.isNullOrEmpty()) onUtterances(matches)
             restartSoon(hardError = false)
         }
@@ -99,23 +100,26 @@ class VoiceListener(
                 error == SpeechRecognizer.ERROR_CLIENT ||
                 error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
             Log.w(TAG, "Recognition error=$error hard=$hard")
+            VoiceDebugLog.log("ERROR: code=$error hard=$hard")
             restartSoon(hardError = hard)
         }
 
         override fun onEndOfSpeech() { /* onResults or onError follows; restart happens there */ }
-        override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() {}
+        override fun onReadyForSpeech(params: Bundle?) { VoiceDebugLog.log("session ready, listening") }
+        override fun onBeginningOfSpeech() { VoiceDebugLog.log("speech detected") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onPartialResults(partialResults: Bundle?) {
             if (stoppedEarlyThisSession) return
             val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            VoiceDebugLog.log("partial: ${partial ?: emptyList<String>()}")
             if (!partial.isNullOrEmpty() && isUnambiguousMatch(partial)) {
                 // stopListening() (not cancel()) lets the recognizer finalize normally —
                 // onResults still fires with what it heard — it just doesn't wait out
                 // the rest of the configured silence timeout to get there.
                 stoppedEarlyThisSession = true
+                VoiceDebugLog.log("unambiguous partial match — stopping session early")
                 try {
                     recognizer?.stopListening()
                 } catch (t: Throwable) {
