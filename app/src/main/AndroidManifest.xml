@@ -1,6 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- UMAssisted: a voice control and mobility assistance helper for
+         Umamusume Pretty Derby, built for universal accessibility. It cuts
+         down the large number of taps and clicks the game's training loop
+         normally requires, so players with limited mobility can play just as
+         easily as anyone else. UMAssisted never decides anything on its
+         own — it only performs the exact game actions the user directs, at
+         their explicit request (REQ-A11/REQ-VAL2). The name is a pun on
+         "unassisted": "Uma" (the game's own "Horse Girl" prefix) stands in
+         for "Un", so "UMAssisted" reads as "un-assisted" — the user remains
+         unassisted in every decision, only assisted in the physical act of
+         carrying it out — while naming the game it assists with (REQ-P1).
+         See @string/app_description and REQUIREMENTS.md in the public
+         design-docs repo for the full spec. -->
+
     <!-- No INTERNET permission (REQ-S1) -->
 
     <!-- Required for the AccessibilityService's startForeground() call — an Android OS

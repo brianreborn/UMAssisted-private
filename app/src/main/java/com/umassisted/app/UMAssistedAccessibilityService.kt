@@ -12,10 +12,10 @@ import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.TextView
@@ -23,6 +23,7 @@ import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.Executors
@@ -47,6 +48,28 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // === Alpha tuning constants (easy to adjust during dev) ===
         const val SWEEP_RELEASE_MS = 180L      // slide clear of the row before lifting
         const val SWEEP_RELEASE_FRAC = 0.12f   // how far clear, as a fraction of window height
+        const val VOICE_ACTION_GRACE_MS = 700L // tap/cancel can abort before the action fires
+        // Gap between the arm-tap and confirm-tap for REQ-V22's "$facility
+        // Training" one-shot — long enough for the game's own preview popup to
+        // render before the commit tap fires, short enough to still feel instant.
+        const val FACILITY_TRAINING_CONFIRM_GAP_MS = 350L
+        // Settle time between a macro step's dispatched tap and the next OCR capture,
+        // long enough for the game's own transition animation to finish so the capture
+        // doesn't land mid-transition and miss the next step's screen.
+        const val MACRO_STEP_SETTLE_MS = 900L
+        // Cap on OCR input's longer side, in px. 1200 is a 50% scale on this
+        // device's 2400px-tall capture — matches tools/capture_screen.sh's
+        // `ffmpeg -vf scale=iw/2:ih/2` in the public UMAssisted repo, the same
+        // 50% factor already established for the debug "snap" corpus captures.
+        // Kept identical deliberately: both pipelines shrink a raw screenshot for
+        // review, one by a human and one by ML Kit, and there's no reason for the
+        // two decisions to drift apart.
+        const val OCR_MAX_DIMENSION_PX = 1200
+        // Retry backoff for a macro tick that found no matching screen: an explicit
+        // schedule rather than a formula, front-loaded very fast since most
+        // "nothing matched" outcomes are a capture landing mid-transition and
+        // resolve within a beat or two.
+        val MACRO_RETRY_DELAYS_MS = longArrayOf(10L, 50L, 100L, 250L, 500L, 1000L, 2000L)
 
         // Simple in-memory state (alpha)
         @Volatile var sweepEnabled = false
@@ -80,7 +103,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         private const val GLYPH_IDLE = "⚪"      // nothing armed
         private const val GLYPH_SWEEP = "🧹"     // sweep + list auto-scroll
         private const val GLYPH_VOICE = "🎤"     // voice listening
-        private const val GLYPH_READ = "👁"      // read screen (OCR only, no input)
+        private const val GLYPH_READ = "🔍"      // read screen (OCR only, no input)
+        private const val GLYPH_PHRASES = "📋"    // REQ-V20: valid commands / current screen panel
         private const val GLYPH_RUN = "▶"       // run ONE sweep pass (dispatches input)
         private const val GLYPH_RUN_BLOCKED = "🚫"  // run unavailable: sweep not armed
         private const val GLYPH_READ_NOCHOICE = "✅"  // last read: safe to advance
@@ -102,6 +126,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         private const val AUTO_COLLAPSE_MS = 5_000L
         private const val CELL_IDLE_COLOR = 0xCC1B1B1B.toInt()
         private const val CELL_ON_COLOR = 0xCC0F766E.toInt()
+        // REQ-A31: the recognizer takes several seconds after being armed before
+        // onRmsChanged starts actually firing (confirmed on-device) — orange
+        // distinguishes "armed, still warming up" from "armed, mic confirmed live".
+        private const val CELL_WARMING_COLOR = 0xCCB45309.toInt()
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -118,14 +146,40 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     // first channel; REQ-A24 defines this as modality-agnostic, so a future non-voice
     // channel (haptic/switch) would feed the same field, not a parallel mechanism.
     @Volatile private var lastVoiceHeartbeatAtMs: Long = 0L
+    private var lastDebouncedVoiceKey: String = ""
+
+    // REQ-A21: while a macro is paused at a Decision step in RECORDING_DEFAULTS mode,
+    // the user's own next tap in the game is what gets recorded as the default for
+    // that decision key — this does not resume the macro (REQ-A5: no auto-continuation
+    // beyond what a single command authorized). Cleared as soon as consumed, or when
+    // superseded by a new command (generation mismatch).
+    private var macroDecisionWaitKey: String? = null
+    private var macroDecisionWaitGen: Int = -1
+    private var macroDecisionWaitRecords: Boolean = false
+    private var macroDecisionWaitMacroName: String = ""
+    private var lastDebouncedVoiceAtMs: Long = 0L
+    private var pendingVoiceMatch: VoiceCorpus.Match? = null
+    private val pendingVoiceRunnable = Runnable { flushPendingVoiceAction() }
+    private var voiceTapCatcher: View? = null
+    private var suppressTapCancelUntilMs: Long = 0L
 
     // Overlay kill switches (REQ-A7 / REQ-A10 / REQ-V9)
     private var overlayView: View? = null
-    private var overlayHandle: TextView? = null
+    private var overlayHandle: AudioLevelView? = null
+    /** REQ-A31: true once onRmsChanged has fired at least once for the current
+     * voice-armed session — the recognizer takes a few seconds to warm up. */
+    @Volatile private var voiceWarmedUp = false
+    /** REQ-A27: whether the currently-running macro was invoked with "quickly". */
+    @Volatile private var currentMacroQuick = false
     private var overlaySweepCell: TextView? = null
     private var overlayVoiceCell: TextView? = null
     private var overlayReadCell: TextView? = null
     private var overlayRunCell: TextView? = null
+    /** REQ-V20: toggle cell for the valid-commands/current-screen panel. */
+    private var overlayPhraseCell: TextView? = null
+    /** REQ-V20: the panel itself — wide multi-line text, not a fixed square cell. */
+    private var overlayPhrasePanel: TextView? = null
+    private var phrasePanelExpanded = false
     private var overlayParams: WindowManager.LayoutParams? = null
     private var overlayExpanded = false
     private var lastOsButtonBounds: Rect? = null
@@ -158,10 +212,30 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         updateForegroundState()
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
+        ) {
+            maybeCancelVoiceFromUserTap("a11y-tap")
+        }
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            maybeRecordMacroDecisionFromTap(event)
+        }
+    }
 
-        // Alpha: we do not auto-react on every event.
-        // Real work is driven by explicit user commands (sweep, voice, or manual capture).
-        // We can add lightweight heuristics later (e.g. detect training view changes).
+    /** REQ-A21: capture what the user tapped at a paused macro Decision step. */
+    private fun maybeRecordMacroDecisionFromTap(event: AccessibilityEvent) {
+        val key = macroDecisionWaitKey ?: return
+        val gen = macroDecisionWaitGen
+        macroDecisionWaitKey = null
+        if (!canContinue(gen)) return
+        val src = event.source
+        val text = (src?.text?.toString() ?: event.text?.joinToString(" ") ?: "").trim()
+        if (text.isBlank() || AutoRunMacros.isForbiddenTapTarget(text)) return
+        if (macroDecisionWaitRecords) {
+            recordDecision("macro.decision.$key", text)
+            Log.i(TAG, "macro $macroDecisionWaitMacroName: recorded default for \"$key\" = \"$text\" from user tap")
+            VoiceDebugLog.log("macro $macroDecisionWaitMacroName: recorded default \"$key\" = \"$text\"")
+        }
     }
 
     /**
@@ -194,6 +268,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 // after returning resolves as Confirm (a real tap) instead of the
                 // fresh Arm the user actually intended.
                 voiceFacilitySelection.clear()
+                handler.removeCallbacks(pendingVoiceRunnable)
+                pendingVoiceMatch = null
+                hideVoiceTapCatcher()
             }
             return
         }
@@ -257,6 +334,16 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     @Volatile var lastOcrText: String = ""
     @Volatile var lastWasNoChoice: Boolean = false
     @Volatile var lastMatchReason: String = ""
+
+    // Tap-by-OCR-text state (REQ-M11): the game exposes no AccessibilityNodeInfo
+    // content at all (single opaque Unity SurfaceView, confirmed empty node tree),
+    // so a matched piece of text can only ever be tapped via the bounding box ML
+    // Kit itself reports, converted back from the (downscaled) OCR bitmap's pixel
+    // space into real screen coordinates using the window bounds and scale factor
+    // captured at the same moment as the OCR request.
+    @Volatile private var lastOcrVisionText: Text? = null
+    @Volatile private var lastOcrCaptureWinBounds: Rect? = null
+    @Volatile private var lastOcrScaleFactor: Float = 1f
 
     // Very crude alpha "decision replay" store (REQ-A4 skeleton).
     // In a real alpha we would persist this. For now it's in-memory + optional SharedPrefs.
@@ -323,37 +410,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "Attempting to replay previous choice: $previous")
 
-        val root = rootInActiveWindow ?: return false
-        val targetNodes = mutableListOf<AccessibilityNodeInfo>()
-
-        fun walk(node: AccessibilityNodeInfo) {
-            val txt = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-            if (txt.contains(previous!!, ignoreCase = true)) {
-                if (node.isClickable || node.isFocusable) targetNodes.add(node)
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { walk(it) }
-            }
-        }
-        walk(root)
-
-        val node = targetNodes.firstOrNull() ?: return false
-        val rect = Rect()
-        node.getBoundsInScreen(rect)
-
-        val cx = rect.centerX().toFloat()
-        val cy = rect.centerY().toFloat()
-        val ok = dispatchGuarded(
-            gen = actionGeneration,
-            points = listOf(cx to cy),
-            what = "decision replay tap",
-            build = {
-                val path = Path().apply { moveTo(cx, cy) }
-                GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, 160))
-                    .build()
-            }
-        )
+        // REQ-M11: was an AccessibilityNodeInfo tree search — always found nothing,
+        // since the game exposes no node content. findAndTapText (OCR bounding
+        // boxes) is the only mechanism that can actually locate text on screen.
+        val ok = findAndTapText(actionGeneration, previous!!, "decision replay tap")
         Log.i(TAG, "Replay tap dispatched=$ok for previous choice")
         return ok
     }
@@ -419,8 +479,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 return false
             }
         }
+        // Injected gestures must not count as a user tap-to-cancel.
+        suppressTapCancelUntilMs = System.currentTimeMillis() + 500L
+        val catcherWasUp = voiceTapCatcher != null
+        if (catcherWasUp) hideVoiceTapCatcher()
         val ok = dispatchGesture(build(), callback, null)
         if (!ok) Log.w(TAG, "dispatchGesture returned false for $what")
+        if (catcherWasUp && hasCancellableVoiceRequest()) showVoiceTapCatcher()
         return ok
     }
 
@@ -455,8 +520,14 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         }
 
         Log.i(TAG, "Taking screenshot for OCR...")
+        val requestedAtMs = android.os.SystemClock.elapsedRealtime()
+        // Captured now, not after the screenshot returns: this is what
+        // findAndTapText will use to convert an OCR bounding box back to a real
+        // screen point, so it must describe the window at the moment the pixels
+        // being OCR'd were actually captured.
+        val winBoundsAtRequest = gameWindowBounds()
 
-        val callback = buildScreenshotCallback(onResult)
+        val callback = buildScreenshotCallback(onResult, requestedAtMs, winBoundsAtRequest)
 
         // Capture the game's window rather than the whole composited display, so our
         // own overlay is structurally excluded — it sits in a separate window above
@@ -479,10 +550,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     private fun buildScreenshotCallback(
-        onResult: ((recognizedText: String, isNoChoice: Boolean) -> Unit)?
+        onResult: ((recognizedText: String, isNoChoice: Boolean) -> Unit)?,
+        requestedAtMs: Long,
+        winBoundsAtRequest: Rect?
     ): TakeScreenshotCallback {
         return object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
+                val capturedAtMs = android.os.SystemClock.elapsedRealtime()
                 // ScreenshotResult has no getBitmap() — the real API exposes a
                 // HardwareBuffer + ColorSpace, wrapped into a Bitmap. The buffer must be
                 // closed once wrapped (Bitmap keeps its own reference to the data), and
@@ -508,12 +582,41 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     return
                 }
 
-                val image = InputImage.fromBitmap(bitmap, 0)
+                val bitmapReadyAtMs = android.os.SystemClock.elapsedRealtime()
+
+                // Downscale before OCR: recognize() cost tracks pixel count. This DOES
+                // require a coordinate translation now (REQ-M11) — findAndTapText
+                // taps by the OCR bounding box ML Kit returns, since the game exposes
+                // no AccessibilityNodeInfo content to tap by. lastOcrScaleFactor below
+                // is exactly what undoes this scale when converting a box back to a
+                // real screen point.
+                val longSide = maxOf(bitmap.width, bitmap.height)
+                val appliedScale = if (longSide > OCR_MAX_DIMENSION_PX) {
+                    OCR_MAX_DIMENSION_PX.toFloat() / longSide
+                } else {
+                    1f
+                }
+                val ocrBitmap = if (appliedScale < 1f) {
+                    android.graphics.Bitmap.createScaledBitmap(
+                        bitmap,
+                        (bitmap.width * appliedScale).toInt().coerceAtLeast(1),
+                        (bitmap.height * appliedScale).toInt().coerceAtLeast(1),
+                        true
+                    )
+                } else {
+                    bitmap
+                }
+                val scaledAtMs = android.os.SystemClock.elapsedRealtime()
+                val image = InputImage.fromBitmap(ocrBitmap, 0)
 
                 textRecognizer.process(image)
                     .addOnSuccessListener { visionText ->
+                        val ocrDoneAtMs = android.os.SystemClock.elapsedRealtime()
                         val fullText = visionText.text
                         lastOcrText = fullText
+                        lastOcrVisionText = visionText
+                        lastOcrCaptureWinBounds = winBoundsAtRequest
+                        lastOcrScaleFactor = appliedScale
 
                         val match = CorpusMatcher.match(fullText)
                         lastWasNoChoice = match.isNoChoice
@@ -524,6 +627,14 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                             Log.i(TAG, fullText.take(1800))
                         }
                         Log.i(TAG, "=== END OCR ===")
+                        Log.i(
+                            TAG,
+                            "OCR timing: capture=${capturedAtMs - requestedAtMs}ms " +
+                                "bitmap=${bitmapReadyAtMs - capturedAtMs}ms " +
+                                "scale=${scaledAtMs - bitmapReadyAtMs}ms (${bitmap.width}x${bitmap.height}->${ocrBitmap.width}x${ocrBitmap.height}) " +
+                                "recognize=${ocrDoneAtMs - scaledAtMs}ms " +
+                                "total=${ocrDoneAtMs - requestedAtMs}ms"
+                        )
 
                         CorpusMatcher.logMatch(fullText)
                         onResult?.invoke(fullText, lastWasNoChoice)
@@ -565,25 +676,47 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Voice listening ${if (enabled) "ENABLED" else "DISABLED"}")
         VoiceDebugLog.log(if (enabled) "=== VOICE ARMED ===" else "=== VOICE DISARMED ===")
         if (enabled) {
+            voiceWarmedUp = false
             val listener = voiceListener
-                ?: VoiceListener(this, ::onVoiceUtterances, ::isUnambiguousVoiceMatch).also { voiceListener = it }
+                ?: VoiceListener(this, ::onVoiceUtterances, ::isUnambiguousVoiceMatch) { rms, active ->
+                    if (!voiceWarmedUp) {
+                        voiceWarmedUp = true
+                        refreshOverlay()
+                    }
+                    overlayHandle?.addSample(rms, active)
+                }.also { voiceListener = it }
             listener.start()
         } else {
             voiceListener?.stop()
             handler.removeCallbacks(voiceResumeRunnable)
             voiceFacilitySelection.clear()
+            handler.removeCallbacks(pendingVoiceRunnable)
+            pendingVoiceMatch = null
+            hideVoiceTapCatcher()
             // A heartbeat recorded before voice was disabled must not go on
             // justifying a sweep restart-on-signal after the fact.
             lastVoiceHeartbeatAtMs = 0L
+            overlayHandle?.clearTrace()
         }
         refreshOverlay()
     }
 
+    /**
+     * REQ-V19 / OQ-43: the cancel/correct vocabulary now exists (VoiceCorpus),
+     * so this resolves partials against the real command corpus instead of
+     * staying permanently inert — without that, every command sat out the
+     * full 60s silence timeout before finalizing (observed on-device).
+     *
+     * A fragment that momentarily resolves (e.g. "speed" mid-utterance, before
+     * the user finishes "speed and stamina") is not filtered out here — it's
+     * filtered by VoiceListener's real-time settle window (EARLY_STOP_SETTLE_MS),
+     * which only stops the session once the *same* match has held for ~900ms
+     * of wall-clock time, spanning several partial updates. This predicate just
+     * says whether the current partial is a real command, not noise.
+     */
     private fun isUnambiguousVoiceMatch(candidates: List<String>): Boolean {
-        if (!voiceEnabled || !isInUma) return false
-        return FacilityVocabulary.matchFacility(candidates) != null ||
-            FacilityVocabulary.isHeartbeat(candidates) ||
-            FacilityVocabulary.matchMacroCommand(candidates) != null
+        val match = VoiceCorpus.resolveDetailed(candidates).match
+        return match !is VoiceCorpus.Match.None && match !is VoiceCorpus.Match.Ambiguous
     }
 
     /** Lets the settings UI apply a chime-mute toggle immediately to an already-armed session. */
@@ -592,55 +725,280 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Routes recognized speech alternates to facility-name matching (REQ-V8/V11
-     * default vocabulary) and REQ-V12's arm/confirm state machine (REQ-A22).
-     * Only meaningful while a sweep is armed and in Uma — matches outside that
-     * context are simply ignored, same as any other command with no live target.
+     * Debug-only: feed a phrase through the same path as STT so the
+     * implemented corpus can be tested without the recognizer.
      */
-    private fun onVoiceUtterances(candidates: List<String>) {
+    fun debugInjectUtterance(text: String) {
+        if (!BuildConfig.DEBUG) return
+        VoiceDebugLog.log("DEBUG inject: $text")
+        onVoiceUtterances(listOf(text))
+    }
+
+    private fun onVoiceUtterances(candidates: List<String>): Boolean {
         Log.i(TAG, "Voice recognized candidates: $candidates")
         VoiceDebugLog.log("utterances: $candidates")
+        val evidence = VoiceCorpus.resolveDetailed(candidates)
+        val resolved = evidence.match
+        VoiceDebugLog.log("resolved: $resolved")
+        VoiceDebugLog.log(evidence.actedOnLine())
+        Log.i(TAG, evidence.actedOnLine())
+
+        // REQ-A31: every path through this function ends with a charm marker
+        // on the overlay trace — accepted (green) for anything genuinely
+        // acted on, rejected (red) for heard-but-unmatched or heard-but-
+        // ignored-by-state. Makes "I said something and nothing happened"
+        // visually distinct from "the mic never heard me" (a gray gap on the
+        // RMS layer, which this function never runs for at all).
+        val acted = onVoiceUtterancesInner(candidates, resolved)
+        overlayHandle?.markCommandResult(acted)
+        return acted
+    }
+
+    private fun onVoiceUtterancesInner(candidates: List<String>, resolved: VoiceCorpus.Match): Boolean {
         if (!voiceEnabled || !isInUma) {
-            VoiceDebugLog.log("ignored (voiceEnabled=$voiceEnabled isInUma=$isInUma)")
-            return
+            VoiceDebugLog.log("ignored (voiceEnabled=$voiceEnabled isInUma=$isInUma resolved=$resolved)")
+            return false
         }
 
-        val macroCmd = FacilityVocabulary.matchMacroCommand(candidates)
-        if (macroCmd != null) {
-            VoiceDebugLog.log("macro command detected: $macroCmd")
-            executeMacroCommand(macroCmd)
-            return
-        }
-
-        if (!sweepEnabled) {
-            VoiceDebugLog.log("facility/heartbeat ignored (sweepEnabled=$sweepEnabled)")
-            return
-        }
-
-        val facilityIndex = FacilityVocabulary.matchFacility(candidates)
-        val heartbeat = FacilityVocabulary.isHeartbeat(candidates)
-        if (facilityIndex != null || heartbeat) {
-            lastVoiceHeartbeatAtMs = System.currentTimeMillis()
-            if (heartbeat) VoiceDebugLog.log("heartbeat/continuation signal detected")
-        }
-
-        if (heartbeat) {
-            if (voiceFacilitySelection.currentlyArmed() != null) {
-                VoiceDebugLog.log("continuation signal: resuming paused sweep")
-                handler.removeCallbacks(voiceResumeRunnable)
-                resumeSweepAfterVoiceTimeout()
-            } else {
-                VoiceDebugLog.log("continuation signal: starting training sweep pass")
-                performTrainingSweepOnce(captureFirst = false)
+        return when (resolved) {
+            is VoiceCorpus.Match.None -> {
+                VoiceDebugLog.log("no match")
+                false
             }
-            return
+            is VoiceCorpus.Match.Ambiguous -> {
+                VoiceDebugLog.log("ambiguous — ignored (say one facility, or the same one twice)")
+                false
+            }
+            is VoiceCorpus.Match.Cancel -> {
+                cancelPendingVoiceRequest("voice:${resolved.phrase}")
+                true
+            }
+            is VoiceCorpus.Match.StopListening -> {
+                VoiceDebugLog.log("stop-listening command: \"${resolved.phrase}\"")
+                // Posted, not called synchronously — this callback is running
+                // from inside VoiceListener's own recognition-result handling;
+                // tearing the recognizer down mid-callback is exactly the kind
+                // of reentrancy that's caused real bugs elsewhere this session.
+                handler.post { setVoiceEnabled(false) }
+                true
+            }
+            is VoiceCorpus.Match.Confirm -> {
+                if (voiceFacilitySelection.currentlyArmed() == null) {
+                    VoiceDebugLog.log("confirm ignored — nothing armed")
+                    return false
+                }
+                scheduleVoiceAction(resolved)
+                true
+            }
+            is VoiceCorpus.Match.Macro,
+            is VoiceCorpus.Match.Heartbeat,
+            is VoiceCorpus.Match.Facility,
+            is VoiceCorpus.Match.FacilityTraining,
+            is VoiceCorpus.Match.HubButton -> {
+                scheduleVoiceAction(resolved)
+                true
+            }
         }
+    }
 
-        if (facilityIndex == null) {
-            VoiceDebugLog.log("no facility match")
+    private fun scheduleVoiceAction(match: VoiceCorpus.Match) {
+        handler.removeCallbacks(pendingVoiceRunnable)
+        // REQ-V4: the tap-to-cancel grace window exists to let a user retract a
+        // *consequential* action before it fires. HubButton (REQ-V23) never
+        // commits anything to the career — it only navigates to a screen that
+        // is already OCR-confirmed to be showing that exact label — so it gets
+        // no grace window and fires immediately instead of waiting it out.
+        if (match is VoiceCorpus.Match.HubButton) {
+            pendingVoiceMatch = null
+            VoiceDebugLog.log("no grace window (inconsequential navigation): $match")
+            executeResolvedVoiceAction(match)
             return
         }
-        VoiceDebugLog.log("matched facility: ${FacilityVocabulary.facilityNames[facilityIndex]}")
+        pendingVoiceMatch = match
+        VoiceDebugLog.log("pending ${VOICE_ACTION_GRACE_MS}ms: $match (say cancel/oops/escape/abort or tap to abort)")
+        showVoiceTapCatcher()
+        handler.postDelayed(pendingVoiceRunnable, VOICE_ACTION_GRACE_MS)
+    }
+
+    private fun flushPendingVoiceAction() {
+        val match = pendingVoiceMatch ?: return
+        pendingVoiceMatch = null
+        executeResolvedVoiceAction(match)
+        if (voiceFacilitySelection.currentlyArmed() != null) {
+            showVoiceTapCatcher()
+        } else {
+            hideVoiceTapCatcher()
+        }
+    }
+
+    private fun executeResolvedVoiceAction(resolved: VoiceCorpus.Match) {
+        when (resolved) {
+            is VoiceCorpus.Match.Macro -> {
+                if (debounceVoice("macro:${resolved.command}")) return
+                VoiceDebugLog.log("macro command detected: ${resolved.command}${if (resolved.quick) " (quickly)" else ""}")
+                executeMacroCommand(resolved.command, resolved.quick)
+            }
+            is VoiceCorpus.Match.Heartbeat -> {
+                if (debounceVoice("heartbeat")) return
+                lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+                VoiceDebugLog.log("heartbeat/continuation signal detected")
+                if (!sweepEnabled) {
+                    VoiceDebugLog.log("continuation ignored (sweepEnabled=false)")
+                    return
+                }
+                if (voiceFacilitySelection.currentlyArmed() != null) {
+                    VoiceDebugLog.log("continuation signal: resuming paused sweep")
+                    handler.removeCallbacks(voiceResumeRunnable)
+                    resumeSweepAfterVoiceTimeout()
+                } else {
+                    VoiceDebugLog.log("continuation signal: starting training sweep pass")
+                    performTrainingSweepOnce(captureFirst = false)
+                }
+            }
+            is VoiceCorpus.Match.Facility -> {
+                lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+                VoiceDebugLog.log("matched facility: ${resolved.name} (x${resolved.repeats})")
+                repeat(resolved.repeats.coerceIn(1, 2)) {
+                    dispatchFacilityUtterance(resolved.index)
+                }
+            }
+            is VoiceCorpus.Match.Confirm -> {
+                val armed = voiceFacilitySelection.currentlyArmed()
+                if (armed == null) {
+                    VoiceDebugLog.log("confirm ignored — nothing armed")
+                    return
+                }
+                VoiceDebugLog.log("confirm word — committing ${FacilityVocabulary.facilityNames[armed]}")
+                dispatchFacilityUtterance(armed)
+            }
+            is VoiceCorpus.Match.FacilityTraining -> {
+                lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+                VoiceDebugLog.log("matched \"${resolved.name} training\" — direct jump")
+                dispatchFacilityTrainingUtterance(resolved.index)
+            }
+            is VoiceCorpus.Match.HubButton -> {
+                lastVoiceHeartbeatAtMs = System.currentTimeMillis()
+                VoiceDebugLog.log("hub button command: \"${resolved.label}\"")
+                dispatchHubButtonUtterance(resolved.label)
+            }
+            else -> { /* None / Ambiguous / Cancel never scheduled */ }
+        }
+    }
+
+    private fun hasCancellableVoiceRequest(): Boolean =
+        pendingVoiceMatch != null || voiceFacilitySelection.currentlyArmed() != null
+
+    private fun maybeCancelVoiceFromUserTap(reason: String) {
+        if (!hasCancellableVoiceRequest()) return
+        if (System.currentTimeMillis() < suppressTapCancelUntilMs) return
+        cancelPendingVoiceRequest(reason)
+    }
+
+    /** REQ-V19: retract an armed or not-yet-dispatched voice action. */
+    private fun cancelPendingVoiceRequest(reason: String) {
+        if (!hasCancellableVoiceRequest()) {
+            VoiceDebugLog.log("CANCEL ($reason): nothing pending")
+            return
+        }
+        val wasArmed = voiceFacilitySelection.currentlyArmed()
+        handler.removeCallbacks(pendingVoiceRunnable)
+        pendingVoiceMatch = null
+        handler.removeCallbacks(voiceResumeRunnable)
+        voiceFacilitySelection.clear()
+        hideVoiceTapCatcher()
+        actionGeneration++
+        VoiceDebugLog.log("CANCELLED ($reason) armedWas=$wasArmed")
+        Log.i(TAG, "Voice request cancelled ($reason)")
+        if (wasArmed != null && sweepEnabled && isInUma) {
+            VoiceDebugLog.log("cancel: resuming sweep after un-arm")
+            performTrainingSweepOnce(captureFirst = false)
+        }
+    }
+
+    private fun showVoiceTapCatcher() {
+        if (voiceTapCatcher != null) return
+        try {
+            val catcher = View(this).apply {
+                setBackgroundColor(0x01FFFFFF)
+                isClickable = true
+                isFocusable = false
+                setOnTouchListener { _, ev ->
+                    if (ev.action == MotionEvent.ACTION_DOWN) {
+                        maybeCancelVoiceFromUserTap("tap")
+                        true
+                    } else {
+                        true
+                    }
+                }
+            }
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            getSystemService(WindowManager::class.java).addView(catcher, params)
+            voiceTapCatcher = catcher
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to show voice tap-catcher", t)
+        }
+    }
+
+    private fun hideVoiceTapCatcher() {
+        val catcher = voiceTapCatcher ?: return
+        try {
+            getSystemService(WindowManager::class.java).removeView(catcher)
+        } catch (_: Throwable) { }
+        voiceTapCatcher = null
+    }
+
+    private fun debounceVoice(key: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (key == lastDebouncedVoiceKey && now - lastDebouncedVoiceAtMs < 1500L) {
+            VoiceDebugLog.log("debounced repeat: $key")
+            return true
+        }
+        lastDebouncedVoiceKey = key
+        lastDebouncedVoiceAtMs = now
+        return false
+    }
+
+    /**
+     * REQ-V22: "$facility Training" — one-shot jump into a facility's training
+     * sub-screen. Reuses the existing arm-tap/confirm-tap pair (pauseSweepAt +
+     * confirmFacilitySelection) back-to-back with a short gap, rather than
+     * waiting on a second utterance — this command is the single-utterance
+     * equivalent of speaking a facility name twice, not a new gesture pattern.
+     * Bypasses VoiceFacilitySelection entirely (clearing any unrelated armed
+     * state first) since this is direct and immediate, not arm-then-wait.
+     */
+    private fun dispatchFacilityTrainingUtterance(facilityIndex: Int) {
+        if (!isInUma) return
+        voiceFacilitySelection.clear()
+        pauseSweepAt(facilityIndex)
+        handler.postDelayed({ confirmFacilitySelection(facilityIndex) }, FACILITY_TRAINING_CONFIRM_GAP_MS)
+    }
+
+    /**
+     * REQ-V23 (narrow case): capture the current screen and tap [label] via OCR
+     * bounding box (findAndTapText) if it's actually visible right now — no
+     * fixed coordinate, no assumption about which screen the user is on. If the
+     * label isn't found (wrong screen, or OCR missed it), this just logs and
+     * does nothing rather than guessing a fallback tap.
+     */
+    private fun dispatchHubButtonUtterance(label: String) {
+        if (!isInUma) return
+        val myGen = ++actionGeneration
+        captureAndAnalyzeScreen { _, _ ->
+            if (!canContinue(myGen)) return@captureAndAnalyzeScreen
+            val ok = findAndTapText(myGen, label, "voice hub button ($label)")
+            VoiceDebugLog.log(if (ok) "hub button \"$label\" tapped" else "hub button \"$label\" not found on screen")
+        }
+    }
+
+    private fun dispatchFacilityUtterance(facilityIndex: Int) {
 
         val now = System.currentTimeMillis()
         when (val action = voiceFacilitySelection.onFacilityUtterance(facilityIndex, now)) {
@@ -665,41 +1023,44 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      * and hold on the named facility — rewinding to it if the sweep had already
      * moved past it. If not confirmed within the confirm window, the sweep
      * resumes rather than sitting frozen (see resumeSweepAfterVoiceTimeout).
+     *
+     * REQ-M11: taps by OCR text (findAndTapText), not fixed window-fraction
+     * coordinates. Observed on-device: the old fixed fraction was calibrated
+     * against the wrong screen entirely (the hub's Infirmary/Recreation/Races
+     * row, not this — the actual training facility-selection sub-screen, which
+     * a fixed guess had never actually been captured against). Text-anchored
+     * lookup is the same fix already proven for REQ-V22/V23; a fresh capture
+     * is required immediately before the tap since findAndTapText reads
+     * whatever OCR pass most recently populated lastOcrVisionText.
      */
     private fun pauseSweepAt(facilityIndex: Int) {
-        if (!isInUma || !sweepEnabled) return
+        if (!isInUma) return
         val myGen = ++actionGeneration
-        val positionsResult = facilityWindowPositions()
-        if (positionsResult == null) {
-            // Geometry unavailable right now (e.g. mid screen-transition) — the
-            // caller already transitioned VoiceFacilitySelection to armed before
-            // this ran, but with no hold dispatched and no resume timer scheduled
-            // that would strand the state machine. Clear it instead so the next
-            // utterance starts a clean arm rather than an unintended confirm.
-            Log.w(TAG, "Voice pause aborted: game window bounds unavailable")
-            VoiceDebugLog.log("pause aborted: game window bounds unavailable")
-            voiceFacilitySelection.clear()
-            return
-        }
-        val (_, positions) = positionsResult
-        val (fx, fy) = positions[facilityIndex]
-        Log.i(TAG, "Voice: pausing sweep on ${FacilityVocabulary.facilityNames[facilityIndex]}")
-
-        val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
-        // Dispatch a tap gesture so Umamusume UI moves to and highlights the armed facility
-        val ok = dispatchGuarded(
-            gen = myGen,
-            points = listOf(fx.toFloat() to fy.toFloat()),
-            build = { GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0L, 60L)).build() },
-            what = "voice pause"
-        )
-        if (ok) {
-            VoiceDebugLog.log("pause: tap gesture dispatched at (${fx.toInt()},${fy.toInt()}) to arm ${FacilityVocabulary.facilityNames[facilityIndex]}")
-            handler.removeCallbacks(voiceResumeRunnable)
-            handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
-        } else {
-            VoiceDebugLog.log("pause: dispatch failed/blocked")
-            voiceFacilitySelection.clear()
+        val label = FacilityVocabulary.facilityNames[facilityIndex]
+        Log.i(TAG, "Voice: pausing sweep on $label")
+        captureAndAnalyzeScreen { _, _ ->
+            if (!canContinue(myGen)) {
+                VoiceDebugLog.log("pause aborted: superseded or left the game mid-capture")
+                voiceFacilitySelection.clear()
+                return@captureAndAnalyzeScreen
+            }
+            val ok = findAndTapText(myGen, label, "voice pause")
+            if (ok) {
+                VoiceDebugLog.log("pause: tapped \"$label\" to arm it")
+                handler.removeCallbacks(voiceResumeRunnable)
+                handler.postDelayed(voiceResumeRunnable, UserSettings.getVoiceConfirmWindowMs())
+            } else {
+                // Geometry/text unavailable right now (e.g. mid screen-transition,
+                // or not actually on the facility-selection screen) — the caller
+                // already transitioned VoiceFacilitySelection to armed before this
+                // ran, but with no hold dispatched and no resume timer scheduled
+                // that would strand the state machine. Clear it instead so the
+                // next utterance starts a clean arm rather than an unintended
+                // confirm.
+                Log.w(TAG, "Voice pause aborted: \"$label\" not found on screen")
+                VoiceDebugLog.log("pause aborted: \"$label\" not found on screen")
+                voiceFacilitySelection.clear()
+            }
         }
     }
 
@@ -708,29 +1069,23 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      * (hover, never tap) — committing a facility is a distinct, deliberate tap,
      * separate from the hover gesture that armed it (REQ-A2's hover-safety
      * discipline: press and tap stay mechanically distinct).
+     *
+     * REQ-M11: same OCR-text-lookup migration as pauseSweepAt above.
      */
     private fun confirmFacilitySelection(facilityIndex: Int) {
-        if (!isInUma || !sweepEnabled) return
+        if (!isInUma) return
         handler.removeCallbacks(voiceResumeRunnable)
         val myGen = ++actionGeneration
-        val positionsResult = facilityWindowPositions()
-        if (positionsResult == null) {
-            Log.w(TAG, "Voice confirm aborted: game window bounds unavailable")
-            VoiceDebugLog.log("confirm aborted: game window bounds unavailable")
-            return
+        val label = FacilityVocabulary.facilityNames[facilityIndex]
+        Log.i(TAG, "Voice: confirming $label")
+        captureAndAnalyzeScreen { _, _ ->
+            if (!canContinue(myGen)) {
+                VoiceDebugLog.log("confirm aborted: superseded or left the game mid-capture")
+                return@captureAndAnalyzeScreen
+            }
+            val ok = findAndTapText(myGen, label, "voice confirm")
+            VoiceDebugLog.log(if (ok) "confirm: tapped \"$label\"" else "confirm: \"$label\" not found on screen")
         }
-        val (_, positions) = positionsResult
-        val (fx, fy) = positions[facilityIndex]
-        Log.i(TAG, "Voice: confirming ${FacilityVocabulary.facilityNames[facilityIndex]}")
-
-        val path = Path().apply { moveTo(fx.toFloat(), fy.toFloat()) }
-        val ok = dispatchGuarded(
-            gen = myGen,
-            points = listOf(fx.toFloat() to fy.toFloat()),
-            build = { GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0L, 60L)).build() },
-            what = "voice confirm"
-        )
-        VoiceDebugLog.log(if (ok) "confirm: tap dispatched at (${fx.toInt()},${fy.toInt()})" else "confirm: dispatch failed/blocked")
     }
 
     /** REQ-A22: an expired arm resumes sweeping rather than leaving the screen paused. */
@@ -744,13 +1099,18 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     /** REQ-A19/A20/A21/A26: Macro command execution. */
-    private fun executeMacroCommand(cmd: MacroCommand) {
+    private fun executeMacroCommand(cmd: MacroCommand, quick: Boolean = false) {
         when (cmd) {
             MacroCommand.START_AUTO_RUN -> executeMacro(AutoRunMacros.startCareer, MacroMode.STEP_ONLY)
             MacroCommand.START_AUTO_RUN_DEFAULTS -> executeMacro(AutoRunMacros.startCareer, MacroMode.DEFAULTS)
             MacroCommand.START_AUTO_RUN_RECORDING -> executeMacro(AutoRunMacros.startCareer, MacroMode.RECORDING_DEFAULTS)
-            MacroCommand.FINISH_AUTO_RUN -> executeMacro(AutoRunMacros.finishCareer, MacroMode.STEP_ONLY)
+            MacroCommand.FINISH_AUTO_RUN -> executeMacro(AutoRunMacros.finishCareer, MacroMode.STEP_ONLY, quick)
             MacroCommand.SUPER_SKIP -> performSuperSkip()
+            MacroCommand.START_SWEEP -> {
+                if (!sweepEnabled) setSweepEnabled(true)
+                performTrainingSweepOnce()
+            }
+            MacroCommand.TOGGLE_SWEEP -> setSweepEnabled(!sweepEnabled)
         }
     }
 
@@ -780,11 +1140,314 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         tapSkip(2) // 2 taps cycles Off -> ▶ -> ▶▶
     }
 
-    private fun executeMacro(macro: MacroDefinition, mode: MacroMode) {
+    private fun executeMacro(macro: MacroDefinition, mode: MacroMode, quick: Boolean = false) {
         if (!isInUma) return
         val myGen = ++actionGeneration
-        Log.i(TAG, "Executing macro ${macro.name} in mode $mode")
-        VoiceDebugLog.log("macro start: ${macro.name} mode=$mode")
+        Log.i(TAG, "Executing macro ${macro.name} in mode $mode quick=$quick")
+        VoiceDebugLog.log("macro start: ${macro.name} mode=$mode${if (quick) " (quickly)" else ""}")
+        // Set once per run, read by the single step (CompleteCareerCheckpoint)
+        // that currently needs it — an instance field rather than threading a
+        // new parameter through every macroTick/retryOrGiveUp recursive call
+        // site, safe because only one macro runs at a time (generation-guarded).
+        currentMacroQuick = quick
+        macroTick(myGen, macro, mode, android.os.SystemClock.elapsedRealtime(), 0, 0, 0L)
+    }
+
+    /**
+     * One step of a running macro (REQ-A19/A20/A21): capture the current screen,
+     * find the first matching MacroStep, act on it, and — for steps that advance
+     * the screen — schedule the next tick. Every re-entry re-checks [canContinue]
+     * (REQ-SF7): a superseding command or leaving the game stops the chain dead,
+     * it never just keeps ticking against whatever is now on screen.
+     *
+     * [retryCount] covers transient "nothing matched yet" outcomes — a capture that
+     * lands mid-transition (e.g. the instant a loading screen's progress bar hits
+     * 100% but the next screen hasn't composited yet) is not the same as a genuinely
+     * unrecognised screen, and retrying briefly avoids stopping a macro run one
+     * frame early. It resets to 0 on every successful step; real stops (Terminal,
+     * NEEDS_USER, ABORTED, EXHAUSTED) are unaffected by it. [retryAnchorMs] is the
+     * elapsedRealtime of the *first* failure in the current retry streak — each
+     * retry's delay is computed against that fixed anchor (MACRO_RETRY_DELAYS_MS
+     * entries are offsets from the streak's start, not from each other), so a
+     * slow capture on retry 2 doesn't push every later retry back by the same
+     * amount.
+     */
+    private fun macroTick(
+        gen: Int,
+        macro: MacroDefinition,
+        mode: MacroMode,
+        startedAtMs: Long,
+        stepCount: Int,
+        retryCount: Int,
+        retryAnchorMs: Long
+    ) {
+        if (!canContinue(gen)) {
+            Log.i(TAG, "macro ${macro.name}: ABORTED (superseded or left the game)")
+            VoiceDebugLog.log("macro ${macro.name}: ABORTED")
+            return
+        }
+        val elapsed = android.os.SystemClock.elapsedRealtime() - startedAtMs
+        if (elapsed > macro.maxDurationMs || stepCount >= macro.maxSteps) {
+            Log.w(TAG, "macro ${macro.name}: EXHAUSTED (steps=$stepCount elapsed=${elapsed}ms)")
+            VoiceDebugLog.log("macro ${macro.name}: EXHAUSTED")
+            return
+        }
+        captureAndAnalyzeScreen { text, _ ->
+            if (!canContinue(gen)) {
+                VoiceDebugLog.log("macro ${macro.name}: ABORTED mid-capture")
+                return@captureAndAnalyzeScreen
+            }
+            val step = macro.steps.firstOrNull { it.matches(text) }
+            if (step == null) {
+                retryOrGiveUp(gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs, "UNRECOGNISED_SCREEN — no step matched")
+                return@captureAndAnalyzeScreen
+            }
+            VoiceDebugLog.log("macro ${macro.name}: step \"${step.name}\" matched")
+            when (val action = step.action) {
+                is MacroAction.Terminal -> {
+                    Log.i(TAG, "macro ${macro.name}: COMPLETED")
+                    VoiceDebugLog.log("macro ${macro.name}: COMPLETED")
+                }
+                is MacroAction.Wait -> {
+                    // No tap, no dispatch — just recognized as "still loading."
+                    // Consumes a stepCount (bounded by maxSteps) so a screen that
+                    // never leaves the loading state still can't stall forever, but
+                    // does not touch the UNRECOGNISED_SCREEN retry budget.
+                    handler.postDelayed(
+                        { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                        MACRO_STEP_SETTLE_MS
+                    )
+                }
+                is MacroAction.TapText -> {
+                    if (findAndTapText(gen, action.text, "macro:${step.name}")) {
+                        handler.postDelayed(
+                            { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                            MACRO_STEP_SETTLE_MS
+                        )
+                    } else {
+                        retryOrGiveUp(
+                            gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs,
+                            "tap target \"${action.text}\" not found for step \"${step.name}\""
+                        )
+                    }
+                }
+                is MacroAction.TapAnyText -> {
+                    // findAndTapText both searches and taps; firstOrNull stops
+                    // at the first candidate actually found, so at most one
+                    // tap is dispatched even though multiple texts are tried.
+                    val found = action.candidates.any { candidate ->
+                        findAndTapText(gen, candidate, "macro:${step.name} ($candidate)")
+                    }
+                    if (found) {
+                        handler.postDelayed(
+                            { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                            MACRO_STEP_SETTLE_MS
+                        )
+                    } else {
+                        retryOrGiveUp(
+                            gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs,
+                            "none of ${action.candidates} found for step \"${step.name}\""
+                        )
+                    }
+                }
+                is MacroAction.CompleteCareerCheckpoint -> {
+                    val skillPts = Regex("skill pts\\D*(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    if (skillPts > 0 && !currentMacroQuick) {
+                        Log.i(TAG, "macro ${macro.name}: stopping at Complete Career — $skillPts unspent skill points")
+                        VoiceDebugLog.log(
+                            "macro ${macro.name}: $skillPts unspent skill points — stopping for you " +
+                                "(say \"quickly\" to skip and finish anyway)"
+                        )
+                        // Falls through to the user — REQ-A27, not a failure, no retry.
+                    } else if (findAndTapText(gen, "Complete Career", "macro:${step.name}")) {
+                        handler.postDelayed(
+                            { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                            MACRO_STEP_SETTLE_MS
+                        )
+                    } else {
+                        retryOrGiveUp(
+                            gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs,
+                            "tap target \"Complete Career\" not found for step \"${step.name}\""
+                        )
+                    }
+                }
+                is MacroAction.TapWindowFraction -> {
+                    val win = gameWindowBounds()
+                    if (win == null) {
+                        retryOrGiveUp(gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs, "no game window bounds")
+                        return@captureAndAnalyzeScreen
+                    }
+                    val x = win.left + win.width() * action.fx
+                    val y = win.top + win.height() * action.fy
+                    val ok = dispatchGuarded(
+                        gen = gen,
+                        points = listOf(x to y),
+                        what = "macro:${step.name}",
+                        build = {
+                            val path = Path().apply { moveTo(x, y) }
+                            GestureDescription.Builder()
+                                .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
+                                .build()
+                        }
+                    )
+                    if (ok) {
+                        handler.postDelayed(
+                            { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                            MACRO_STEP_SETTLE_MS
+                        )
+                    } else {
+                        retryOrGiveUp(gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs, "window-fraction tap blocked")
+                    }
+                }
+                is MacroAction.Decision -> {
+                    val key = action.key
+                    val stored = if (mode.replaysDefaults) getLastDecision("macro.decision.$key") else null
+                    if (stored != null) {
+                        VoiceDebugLog.log("macro ${macro.name}: decision \"$key\" replaying stored default \"$stored\"")
+                        if (findAndTapText(gen, stored, "macro:${step.name} (replay $key)")) {
+                            if (mode.recordsDefaults) recordDecision("macro.decision.$key", stored)
+                            handler.postDelayed(
+                                { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
+                                MACRO_STEP_SETTLE_MS
+                            )
+                        } else {
+                            Log.w(TAG, "macro ${macro.name}: stored default \"$stored\" not on screen for \"$key\"")
+                            VoiceDebugLog.log("macro ${macro.name}: NEEDS_USER — stored default not on screen for \"$key\"")
+                        }
+                    } else {
+                        Log.i(TAG, "macro ${macro.name}: NEEDS_USER at decision \"$key\"")
+                        VoiceDebugLog.log("macro ${macro.name}: NEEDS_USER — decision \"$key\" (say or tap your choice)")
+                        if (mode.recordsDefaults) {
+                            macroDecisionWaitKey = key
+                            macroDecisionWaitGen = gen
+                            macroDecisionWaitRecords = true
+                            macroDecisionWaitMacroName = macro.name
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Transient-failure retry against a fixed schedule (MACRO_RETRY_DELAYS_MS),
+     * fast to start since screen transitions usually resolve within a beat or two,
+     * and capped so a genuinely stuck macro still gives up in well under its
+     * maxDurationMs ceiling. Delays are offsets from [retryAnchorMs] — the moment
+     * the *first* failure in this streak was detected — not from each other, so a
+     * slow capture on one retry doesn't push every subsequent retry's absolute
+     * timing back by the same amount.
+     */
+    private fun retryOrGiveUp(
+        gen: Int,
+        macro: MacroDefinition,
+        mode: MacroMode,
+        startedAtMs: Long,
+        stepCount: Int,
+        retryCount: Int,
+        retryAnchorMs: Long,
+        reason: String
+    ) {
+        if (retryCount >= MACRO_RETRY_DELAYS_MS.size) {
+            Log.w(TAG, "macro ${macro.name}: giving up after $retryCount retries — $reason")
+            VoiceDebugLog.log("macro ${macro.name}: UNRECOGNISED_SCREEN (after $retryCount retries) — falling through to user")
+            return
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        val anchor = if (retryCount == 0) now else retryAnchorMs
+        val delay = (anchor + MACRO_RETRY_DELAYS_MS[retryCount] - now).coerceAtLeast(0L)
+        VoiceDebugLog.log("macro ${macro.name}: retry ${retryCount + 1}/${MACRO_RETRY_DELAYS_MS.size} in ${delay}ms — $reason")
+        handler.postDelayed(
+            { macroTick(gen, macro, mode, startedAtMs, stepCount, retryCount + 1, anchor) },
+            delay
+        )
+    }
+
+    /**
+     * Find text matching [text] in the most recent OCR pass and tap its bounding
+     * box's center, gated by the same REQ-SF7 checks as every other dispatch.
+     * Refuses to tap anything on AutoRunMacros.NEVER_TAP even if a fuzzy match
+     * landed there — a macro must never be the reason "Delete Data" gets tapped
+     * instead of "Resume" one row above it.
+     *
+     * REQ-M11: this used to search the AccessibilityNodeInfo tree — confirmed
+     * on-device that Umamusume renders as a single opaque Unity SurfaceView with
+     * no accessibility content inside it at all, so that search always found
+     * nothing and every TapText step silently failed. The only source of "where
+     * is this text on screen" is OCR's own bounding boxes, converted from the
+     * (possibly downscaled) OCR bitmap's pixel space back to real screen
+     * coordinates via the window bounds + scale factor captured at the same
+     * moment as the OCR request that found this text.
+     */
+    private fun findAndTapText(gen: Int, text: String, what: String): Boolean {
+        if (AutoRunMacros.isForbiddenTapTarget(text)) {
+            Log.w(TAG, "Refusing macro tap on forbidden target: $text")
+            return false
+        }
+        val visionText = lastOcrVisionText ?: return false
+        val winBounds = lastOcrCaptureWinBounds ?: return false
+        val scale = lastOcrScaleFactor
+
+        // Exact line match first (a button label is normally its own whole
+        // line), THEN substring-in-line, THEN whole-block substring. Observed
+        // on-device: substring-only matching hit "training" incidentally inside
+        // an unrelated hint sentence ("...keep on top of her training.") before
+        // ever reaching the actual "Training" button label, because that
+        // sentence's OCR block came first in reading order — tapping the wrong
+        // thing while still reporting success. Preferring an exact line match
+        // avoids exactly this: a real button label rarely shares its line with
+        // other text, while incidental word-in-a-sentence hits do.
+        var box: Rect? = null
+
+        // Pass 1: exact line match.
+        exact@ for (block in visionText.textBlocks) {
+            for (line in block.lines) {
+                if (line.text.trim().equals(text, ignoreCase = true) &&
+                    !AutoRunMacros.isForbiddenTapTarget(line.text)
+                ) {
+                    box = line.boundingBox
+                    break@exact
+                }
+            }
+        }
+
+        // Pass 2: substring-in-line, then whole-block substring.
+        if (box == null) {
+            substring@ for (block in visionText.textBlocks) {
+                for (line in block.lines) {
+                    if (line.text.contains(text, ignoreCase = true) &&
+                        !AutoRunMacros.isForbiddenTapTarget(line.text)
+                    ) {
+                        box = line.boundingBox
+                        break@substring
+                    }
+                }
+            }
+        }
+        if (box == null) {
+            for (block in visionText.textBlocks) {
+                if (block.text.contains(text, ignoreCase = true) && !AutoRunMacros.isForbiddenTapTarget(block.text)) {
+                    box = block.boundingBox
+                    break
+                }
+            }
+        }
+        val found = box ?: return false
+
+        val cx = winBounds.left + found.exactCenterX() / scale
+        val cy = winBounds.top + found.exactCenterY() / scale
+        return dispatchGuarded(
+            gen = gen,
+            points = listOf(cx to cy),
+            what = what,
+            build = {
+                val path = Path().apply { moveTo(cx, cy) }
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, 160))
+                    .build()
+            }
+        )
     }
 
     /**
@@ -1101,82 +1764,31 @@ class UMAssistedAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, "No-choice advance requested (lastMatchReason=${lastMatchReason})")
 
-        val root = rootInActiveWindow ?: run {
-            Log.w(TAG, "No active window root")
-            return
-        }
-
-        // Keep in sync with CorpusMatcher positive (no-choice) rules.
-        // These are the safe-to-advance generic UI strings observed across the corpus.
-        val advanceLabels = listOf(
-            "close", "next", "ok", "confirm", "race", "enter", "continue",
-            "skip", "results", "watch", "replay", "done", "finish"
-        )
-
-        val candidates = mutableListOf<AccessibilityNodeInfo>()
-
-        fun collect(node: AccessibilityNodeInfo) {
-            val text = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-            val lower = text.lowercase()
-            if (advanceLabels.any { lower.contains(it) }) {
-                if (node.isClickable || node.isFocusable) {
-                    candidates.add(node)
-                }
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { collect(it) }
-            }
-        }
-
-        collect(root)
-
-        if (candidates.isEmpty()) {
-            Log.i(TAG, "No obvious advance button found via nodes. Falling back to center tap (risky).")
-            // Very conservative fallback: tap roughly where "Close" or "Next" often is
-            // (bottom centre of the GAME WINDOW, not the display — REQ-PL5).
-            val win = gameWindowBounds()
-            if (win == null || win.isEmpty) {
-                Log.w(TAG, "Advance fallback aborted: game window bounds unavailable")
+        // REQ-M11: was an AccessibilityNodeInfo tree search — always found nothing,
+        // since the game exposes no node content, so this path silently degraded to
+        // the blind center-tap fallback on every single invocation. findAndTapText
+        // (OCR bounding boxes) is the only mechanism that can actually locate these
+        // labels on screen. Order reflects common corpus patterns for safe advance;
+        // first label whose text is actually found and tapped wins.
+        val priority = listOf("next", "confirm", "race", "enter", "continue", "ok", "done", "finish", "skip", "results", "replay", "watch", "close")
+        for (label in priority) {
+            if (findAndTapText(myGen, label, "no-choice advance ($label)")) {
+                Log.i(TAG, "No-choice advance: tapped \"$label\"")
                 return
             }
-            val fx = win.left + win.width() * 0.5f
-            val fy = win.top + win.height() * 0.88f
-            tap(fx, fy, 120, myGen, "advance fallback (blind)")
-            return
         }
 
-        // Prefer a "primary" action when multiple candidates exist.
-        // Order reflects common corpus patterns for safe advance.
-        val priority = listOf("next", "confirm", "race", "enter", "continue", "ok", "done", "finish", "skip", "results", "replay", "watch", "close")
-        val target = candidates.minByOrNull { c ->
-            val t = ((c.text?.toString() ?: "") + " " + (c.contentDescription?.toString() ?: "")).lowercase()
-            val idx = priority.indexOfFirst { t.contains(it) }
-            if (idx >= 0) idx else 999
-        } ?: candidates.first()
-
-        val rect = Rect()
-        target.getBoundsInScreen(rect)
-
-        Log.i(TAG, "Tapping advance candidate at ${rect.centerX()},${rect.centerY()}")
-
-        val cx = rect.centerX().toFloat()
-        val cy = rect.centerY().toFloat()
-        dispatchGuarded(
-            gen = myGen,
-            points = listOf(cx to cy),
-            what = "no-choice advance",
-            build = {
-                val path = Path().apply { moveTo(cx, cy) }
-                GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, 180))
-                    .build()
-            },
-            callback = object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription) {
-                    Log.i(TAG, "No-choice advance tap completed")
-                }
-            }
-        )
+        Log.i(TAG, "No obvious advance button found via OCR. Falling back to center tap (risky).")
+        // Very conservative fallback: tap roughly where "Close" or "Next" often is
+        // (bottom centre of the GAME WINDOW, not the display — REQ-PL5).
+        val win = gameWindowBounds()
+        if (win == null || win.isEmpty) {
+            Log.w(TAG, "Advance fallback aborted: game window bounds unavailable")
+            return
+        }
+        val fx = win.left + win.width() * 0.5f
+        val fy = win.top + win.height() * 0.88f
+        tap(fx, fy, 120, myGen, "advance fallback (blind)")
     }
 
     /**
@@ -1430,7 +2042,21 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
             // Collapsed handle. Tapping expands; tapping again collapses.
-            val handle = makeCell(GLYPH_IDLE) { toggleOverlayExpanded() }
+            // REQ-A31: AudioLevelView draws a live RMS trace under the same
+            // glyph/background this cell has always shown — same click/sizing
+            // contract as makeCell(), not a separate control.
+            val handle = AudioLevelView(this).apply {
+                text = GLYPH_IDLE
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(CELL_IDLE_COLOR)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    Log.i(TAG, "Overlay cell clicked: text=$text")
+                    toggleOverlayExpanded()
+                }
+            }
             val sweepCell = makeCell(GLYPH_SWEEP) { setSweepEnabled(!sweepEnabled); armAutoCollapse() }
             val voiceCell = makeCell(GLYPH_VOICE) { setVoiceEnabled(!voiceEnabled); armAutoCollapse() }
             val readCell = makeCell(GLYPH_READ) {
@@ -1463,11 +2089,30 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 }
             }
 
+            // REQ-V20: valid-commands/current-screen panel. Toggle cell sizes like
+            // every other cell (fixed square, applyOverlayGeometry); the panel it
+            // reveals is a separate wide multi-line view, not squeezed into that
+            // same square, so it's actually readable.
+            val phraseCell = makeCell(GLYPH_PHRASES) {
+                phrasePanelExpanded = !phrasePanelExpanded
+                refreshOverlay()
+            }
+            val phrasePanel = TextView(this).apply {
+                gravity = Gravity.START
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(CELL_IDLE_COLOR)
+                setPadding(12, 8, 12, 8)
+                textSize = 11f
+                visibility = View.GONE
+            }
+
             root.addView(handle)
             root.addView(sweepCell)
             root.addView(voiceCell)
             root.addView(readCell)
             root.addView(runCell)
+            root.addView(phraseCell)
+            root.addView(phrasePanel)
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -1488,6 +2133,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             overlayVoiceCell = voiceCell
             overlayReadCell = readCell
             overlayRunCell = runCell
+            overlayPhraseCell = phraseCell
+            overlayPhrasePanel = phrasePanel
             overlayParams = params
 
             applyOverlayGeometry()
@@ -1513,7 +2160,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val osButton = findAccessibilityButtonBounds()
         val cell = osButton?.width() ?: defaultCellPx()
 
-        for (v in listOfNotNull(overlayHandle, overlaySweepCell, overlayVoiceCell, overlayReadCell, overlayRunCell)) {
+        for (v in listOfNotNull(overlayHandle, overlaySweepCell, overlayVoiceCell, overlayReadCell, overlayRunCell, overlayPhraseCell)) {
             val lp = LinearLayout.LayoutParams(cell, cell)
             lp.topMargin = CELL_GAP_PX
             v.layoutParams = lp
@@ -1521,6 +2168,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             // textSize setter interprets sp, which over-scales by the display density.
             v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, cell * TEXT_SIZE_RATIO)
         }
+        // REQ-V20: the phrase panel is deliberately NOT squeezed into the fixed
+        // square cell size above — it needs real width to be readable.
+        overlayPhrasePanel?.layoutParams = LinearLayout.LayoutParams(
+            (220 * resources.displayMetrics.density).toInt(),
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = CELL_GAP_PX }
 
         if (osButton != null) {
             // Dock under the button, aligned to its edge, so the two read as one
@@ -1562,6 +2215,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     private fun hideOverlay() {
+        hideVoiceTapCatcher()
         val view = overlayView ?: return
         handler.removeCallbacks(collapseRunnable)
         try {
@@ -1594,9 +2248,48 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         overlayVoiceCell = null
         overlayReadCell = null
         overlayRunCell = null
+        overlayPhraseCell = null
+        overlayPhrasePanel = null
+        phrasePanelExpanded = false
         overlayParams = null
         overlayExpanded = false
         lastOsButtonBounds = null
+    }
+
+    /**
+     * REQ-V20: what the corpus would currently accept, gated by live state — not
+     * a flat dump of the whole dictionary. Also carries the raw OCR text of the
+     * last capture (there is no real screen classifier yet, OQ-49), labeled
+     * honestly as raw text rather than implying a classified screen name.
+     */
+    private fun computeValidCommandsSnapshot(): String {
+        val screenExcerpt = lastOcrText.take(80).replace("\n", " / ").ifBlank { "(no capture yet)" }
+        val sb = StringBuilder("Screen (raw OCR): $screenExcerpt\n\n")
+        if (!voiceEnabled) {
+            sb.append("Voice is OFF")
+            return sb.toString()
+        }
+        if (!isInUma) {
+            sb.append("Valid: (not in Umamusume)")
+            return sb.toString()
+        }
+        // Man-page style: [x] optional, x|y alternatives, x* repeatable.
+        sb.append("Valid now:\n")
+        val armed = voiceFacilitySelection.currentlyArmed()
+        if (armed != null) {
+            sb.append("- ${FacilityVocabulary.facilityNames[armed]} (repeat to confirm)\n")
+            sb.append("- cancel|oops|escape|abort\n")
+        } else {
+            sb.append("- speed|stamina|power|guts|wit\n")
+            sb.append("- {speed|stamina|power|guts|wit} training\n")
+            sb.append("- training|facilities\n")
+        }
+        if (sweepEnabled) sb.append("- resume|continue\n")
+        sb.append("- [auto] sweep\n")
+        sb.append("- start|resume|continue {auto run|career}\n")
+        sb.append("- [quickly] finish|complete {auto run|career} [quickly]\n")
+        sb.append("- stop listening|mute|voice off\n")
+        return sb.toString()
     }
 
     /**
@@ -1620,8 +2313,19 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             }
         }
 
+        // REQ-A31: voice armed but the recognizer hasn't produced its first
+        // onRmsChanged sample yet reads as orange rather than green — applies
+        // to both the per-cell voice indicator and (see below) the collapsed
+        // handle, so the two views of voice state never disagree.
+        val voiceWarming = voiceEnabled && !voiceWarmedUp
         overlaySweepCell?.setBackgroundColor(if (sweepEnabled) CELL_ON_COLOR else CELL_IDLE_COLOR)
-        overlayVoiceCell?.setBackgroundColor(if (voiceEnabled) CELL_ON_COLOR else CELL_IDLE_COLOR)
+        overlayVoiceCell?.setBackgroundColor(
+            when {
+                !voiceEnabled -> CELL_IDLE_COLOR
+                voiceWarming -> CELL_WARMING_COLOR
+                else -> CELL_ON_COLOR
+            }
+        )
         // The read cell reports the last read's verdict rather than a generic icon —
         // ✅ safe to advance, ❓ a real choice is on screen, ❌ nothing recognised.
         overlayReadCell?.text = when (lastReadSummary) {
@@ -1637,6 +2341,15 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         overlayVoiceCell?.visibility = childVisibility
         overlayReadCell?.visibility = childVisibility
         overlayRunCell?.visibility = childVisibility
+        overlayPhraseCell?.visibility = childVisibility
+        // REQ-V20: the panel needs both the cluster open AND its own toggle on.
+        // Text only overwritten here (not cleared elsewhere), so it stays sticky
+        // on whatever it last showed rather than flashing blank between screens.
+        overlayPhrasePanel?.visibility =
+            if (overlayExpanded && phrasePanelExpanded) View.VISIBLE else View.GONE
+        if (overlayExpanded && phrasePanelExpanded) {
+            overlayPhrasePanel?.text = computeValidCommandsSnapshot()
+        }
         // Run is only meaningful once sweep is armed; show that rather than failing
         // silently when tapped.
         overlayRunCell?.text = if (sweepEnabled) GLYPH_RUN else GLYPH_RUN_BLOCKED
@@ -1646,7 +2359,16 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // collapsed state still communicates whether anything is armed.
         val armed = sweepEnabled || voiceEnabled
         overlayHandle?.text = if (armed) GLYPH_ARMED else GLYPH_IDLE
-        overlayHandle?.setBackgroundColor(if (armed) CELL_ON_COLOR else CELL_IDLE_COLOR)
+        overlayHandle?.setBackgroundColor(
+            when {
+                !armed -> CELL_IDLE_COLOR
+                // Sweep being armed is itself "definitely armed" (sweep needs
+                // no warmup), so only show the aggregate handle as warming
+                // when voice is the sole reason anything is armed at all.
+                voiceWarming && !sweepEnabled -> CELL_WARMING_COLOR
+                else -> CELL_ON_COLOR
+            }
+        )
     }
 
 }

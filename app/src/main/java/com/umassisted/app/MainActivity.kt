@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -297,6 +298,24 @@ class MainActivity : AppCompatActivity() {
         } else {
             statusText.text = getString(R.string.status_ready)
         }
+
+        handleVoiceInject(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleVoiceInject(intent)
+    }
+
+    /** Debug: `adb shell am start -n com.umassisted.app/.MainActivity --es inject stamina` */
+    private fun handleVoiceInject(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
+        val text = intent?.getStringExtra("inject") ?: return
+        val resolved = VoiceCorpus.resolve(listOf(text))
+        statusText.text = "inject '$text' → $resolved"
+        UMAssistedAccessibilityService.instance?.debugInjectUtterance(text)
+            ?: Log.w("UMAssisted", "inject dropped — service not running")
     }
 
     /**
@@ -450,7 +469,7 @@ class MainActivity : AppCompatActivity() {
 
         wireLongSetting(
             voiceSilenceTimeoutEditText, voiceSilenceTimeoutSetButton, voiceSilenceTimeoutSeekBar, voiceSilenceTimeoutLabel,
-            "Recognition silence timeout: ", " ms", 2000L, 60000L,
+            "Recognition silence timeout: ", " ms", 8000L, 60000L,
             getter = { UserSettings.getVoiceSilenceTimeoutMs() },
             setter = { UserSettings.setVoiceSilenceTimeoutMs(it) }
         )
@@ -475,6 +494,10 @@ class MainActivity : AppCompatActivity() {
 
         val dialogHandler = Handler(Looper.getMainLooper())
         var polling = true
+        // Only auto-scroll when a new entry actually arrived since the last poll —
+        // otherwise every 400ms tick yanks the view back to the bottom even while
+        // the user has scrolled up to read earlier history.
+        var lastEntryCount = -1
         val refresh: () -> Unit = refresh@{
             val entries = VoiceDebugLog.snapshot()
             textView.text = if (entries.isEmpty()) {
@@ -482,7 +505,10 @@ class MainActivity : AppCompatActivity() {
             } else {
                 entries.joinToString("\n") { e -> "[${"%6.1f".format(e.atMs / 1000.0)}s] ${e.text}" }
             }
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+            if (entries.size != lastEntryCount) {
+                lastEntryCount = entries.size
+                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+            }
         }
         val pollRunnable = object : Runnable {
             override fun run() {
@@ -493,7 +519,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Voice Debug Log")
+            .setTitle("Voice Pipeline Log")
             .setView(scroll)
             .setPositiveButton("Close", null)
             .setNeutralButton("Clear") { _, _ -> VoiceDebugLog.clear(); refresh() }

@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">UMAssisted</string>
+    <!-- REQ-P1: "UMAssisted" is a pun on "unassisted" — "Uma" (the game's own
+         "Horse Girl" prefix) stands in for "Un", so the name reads as
+         "un-assisted" while naming the game it assists with. -->
+    <string name="app_description">A voice control and mobility assistance helper for Umamusume Pretty Derby, built for universal accessibility. It cuts down the large number of taps and clicks the game\'s training loop normally requires, so players with limited mobility can play just as easily as anyone else. UMAssisted never decides anything on its own — it only performs the exact game actions the user directs, at their explicit request.</string>
     <string name="service_description">Assists with Aoharu Hai / Unity Cup career (training sweep, no-choice advance, exit). Alpha scope only.</string>
     <string name="sweep_toggle">Training Sweep</string>
     <string name="voice_toggle">Voice Listen</string>

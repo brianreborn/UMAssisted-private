@@ -47,16 +47,19 @@ object UserSettings {
      * sent), so raising it is not guaranteed to change anything on every
      * device, but it costs nothing to expose and helps on engines that do
      * honor it. Default 8000ms, a bit above that observed floor. Bounds:
-     * [2000, 60000] ms — floor is long enough to finish a short phrase;
-     * ceiling avoids an effectively-frozen mic session.
+     * [8000, 60000] ms — floor must outlast a short command plus the
+     * engine's VAD false-starts (a 2000ms floor was observed to end the
+     * session on the start-chime click before the user could finish a word).
+     * Ceiling avoids an effectively-frozen mic session.
      */
     fun getVoiceSilenceTimeoutMs(): Long {
         val stored = prefs.getLong("voice_silence_timeout_ms", -1L)
-        return if (stored > 0) stored else 8000L
+        val raw = if (stored > 0) stored else 8000L
+        return raw.coerceIn(8000L, 60000L)
     }
 
     fun setVoiceSilenceTimeoutMs(ms: Long) {
-        val bounded = ms.coerceIn(2000L, 60000L)
+        val bounded = ms.coerceIn(8000L, 60000L)
         prefs.edit().putLong("voice_silence_timeout_ms", bounded).apply()
     }
 
@@ -160,13 +163,15 @@ object UserSettings {
 
     /**
      * Number of passes for DECELERATING_PASSES mode. Bounded and fixed per
-     * invocation (REQ-A5 — a defined terminal state, not a loop). Default 3:
-     * a quick look, then two progressively slower confirmations.
-     * Bounds: [1, 6]. 1 behaves like a single SINUSOIDAL pass.
+     * invocation (REQ-A5 — a defined terminal state, not a loop). Default 6
+     * (the max): several back-and-forth passes (direction reverses every
+     * pass), each slower than the last, totaling roughly 30s by default at
+     * the default period/slowdown — several genuine looks, not a quick
+     * once-over. Bounds: [1, 6]. 1 behaves like a single SINUSOIDAL pass.
      */
     fun getSweepPassCount(): Int {
         val stored = prefs.getInt("sweep_pass_count", -1)
-        return if (stored > 0) stored else 3
+        return if (stored > 0) stored else 6
     }
 
     fun setSweepPassCount(count: Int) {
@@ -177,13 +182,16 @@ object UserSettings {
     /**
      * How much slower each successive pass is than the one before it, in
      * DECELERATING_PASSES mode (pass period is multiplied by this factor
-     * per pass). Default 1.5 (each pass 50% slower). Bounds: [1.0, 3.0] —
-     * 1.0 degenerates to equal-speed repeated passes; above 3.0 the later
-     * passes become impractically slow for a bounded 6-pass ceiling.
+     * per pass). Default 1.3 (each pass 30% slower) — paired with the
+     * default 6-pass count and 2500ms base period, this totals roughly
+     * 2500*(1+1.3+1.3^2+...+1.3^5) ≈ 32s for the whole sweep. Bounds:
+     * [1.0, 3.0] — 1.0 degenerates to equal-speed repeated passes; above
+     * 3.0 the later passes become impractically slow for a bounded 6-pass
+     * ceiling.
      */
     fun getSweepPassSlowdownFactor(): Float {
         val stored = prefs.getFloat("sweep_pass_slowdown", -1f)
-        return if (stored > 0f) stored else 1.5f
+        return if (stored > 0f) stored else 1.3f
     }
 
     fun setSweepPassSlowdownFactor(factor: Float) {

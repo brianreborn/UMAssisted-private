@@ -44,6 +44,27 @@ sealed class MacroAction {
     data class TapText(val text: String) : MacroAction()
 
     /**
+     * Advance by tapping whichever of [candidates] is actually visible, tried
+     * in order — for a no-choice interstitial whose exact button wording
+     * varies by occurrence (e.g. a news/announcement dismissal that might
+     * read "Close", "OK", or "Next" depending on which notice is showing).
+     * Distinct from [Decision]: none of these candidates is a real choice
+     * between different outcomes, they're synonyms for the same dismissal.
+     */
+    data class TapAnyText(val candidates: List<String>) : MacroAction()
+
+    /**
+     * REQ-A27: the Complete Career hub screen, which shows unspent skill
+     * points alongside the "Complete Career" button itself (not a separate
+     * screen — confirmed via live capture, 2026-08). Not a generic tap:
+     * gated on whether the current OCR text shows a nonzero "Skill Pts"
+     * count and whether the invoking command was "quickly" — handled
+     * specially in macroTick rather than as a plain TapText, since the
+     * decision to stop-and-let-the-user-spend vs. proceed depends on both.
+     */
+    object CompleteCareerCheckpoint : MacroAction()
+
+    /**
      * Advance by tapping a point expressed as a fraction of the *game window*
      * (never the display — REQ-PL5). Only for controls with no reliable text.
      */
@@ -59,6 +80,16 @@ sealed class MacroAction {
 
     /** The macro's goal state — stop, successfully. */
     object Terminal : MacroAction()
+
+    /**
+     * Recognized as a genuine loading/transition screen — do nothing, just tick
+     * again shortly. Distinct from UNRECOGNISED_SCREEN's short retry-then-give-up
+     * budget: loading tip text rotates through many variants (observed on-device:
+     * "Tazuna's Advice" pairs with different, unpredictable tip copy each time),
+     * so matching this screen *at all* — regardless of which tip is showing — is
+     * the general fix, rather than enumerating every tip variant as its own step.
+     */
+    object Wait : MacroAction()
 }
 
 /**
@@ -159,9 +190,96 @@ object AutoRunMacros {
      * matchers for screens nobody has captured is how a macro ends up tapping the
      * wrong thing. They are listed as gaps below.
      */
+    /**
+     * Day-boundary screens: a calendar-day rollover can interpose these between
+     * *any* macro's steps, not just a career's natural completion (finishCareer
+     * was where they were first captured, live, 2026-08) — a "start auto run"
+     * issued on a fresh day after the Continue Career modal's Resume is just as
+     * likely to hit Login Bonus/Notices/Date Changed as a finish is. Shared
+     * between startCareer and finishCareer via spread (`*dayBoundarySteps`)
+     * rather than duplicated, so a fix to one applies to both.
+     */
+    private val dayBoundarySteps: Array<MacroStep> = arrayOf(
+        MacroStep(
+            name = "Date Changed dialog",
+            matches = containsAny("date changed"),
+            action = MacroAction.TapText("OK")
+        ),
+        MacroStep(
+            name = "blank loading transition",
+            // The day-rollover transition (horseshoe-pattern background, no text
+            // at all) OCRs as empty/near-empty — distinct from the "now loading"
+            // tip-text screen elsewhere in this file, which always has real text.
+            matches = { text -> text.trim().length < 5 },
+            action = MacroAction.Wait
+        ),
+        MacroStep(
+            name = "Login Bonus: tap through",
+            // No stable button text ("tap anywhere to continue" per REQ-A19-
+            // adjacent live testing) — center-screen tap, clear of the reward
+            // icon/carat display and the skip control in the corner.
+            matches = containsAny("login bonus"),
+            action = MacroAction.TapWindowFraction(0.5f, 0.42f)
+        ),
+        MacroStep(
+            name = "Notices: dismiss",
+            // "Close" at the list level, "Back" if a tap happened to land on an
+            // item and opened its detail — either dismisses this screen.
+            matches = containsAny("notices"),
+            action = MacroAction.TapAnyText(listOf("Close", "Back"))
+        )
+    )
     val startCareer = MacroDefinition(
         name = START_CAREER,
         steps = listOf(
+            MacroStep(
+                name = "title splash: tap to start",
+                // The stylized "Umamusume Pretty Derby" logo art and the animated
+                // "TAP TO START" prompt OCR unreliably (observed on-device:
+                // "FAETTYDEREY", "AP TO SAR" during the intro animation cycle).
+                // "Trainer ID: Tap here to display" and the version/copyright line
+                // are plain, non-stylized text that read cleanly in every capture
+                // of this screen, animated or not — key off those instead.
+                matches = containsAll("trainer id"),
+                // Screen center: clear of the overlay controls (top-left), the
+                // hamburger menu and CRIWARE badge (bottom corners), and the
+                // Trainer ID toggle itself (top-left text) — anywhere on the
+                // rest of the splash advances past it.
+                action = MacroAction.TapWindowFraction(0.5f, 0.5f)
+            ),
+            MacroStep(
+                name = "loading screen (any tip text)",
+                // "Now Loading..." is the one stable signal across every observed tip
+                // variant — the tip copy itself rotates unpredictably ("Tazuna's
+                // Advice" pairs with different, un-enumerable text each time) and
+                // sometimes has no actionable button text at all (no "OKAY!"), so
+                // matching on tip content doesn't scale. Just wait it out.
+                matches = containsAny("now loading"),
+                action = MacroAction.Wait
+            ),
+            MacroStep(
+                name = "news/announcement dismissal (no-choice)",
+                // REQ-A19 explicitly lists this as a licensed no-choice
+                // interstitial on the resume path ("news/announcement
+                // dismissals that are Close/Next/OK-only"), between the title
+                // splash and the home CAREER button. Deliberately narrower
+                // than the old generic "any Next/OK/Confirm" fallback this
+                // replaces (removed after it was observed blindly tapping
+                // through unlicensed new-career decision screens): requires
+                // actual announcement/notice vocabulary to be present, not
+                // just dismissal-shaped button text, so it can't fire on a
+                // real decision screen that happens to also have a Next/OK
+                // button — none of those mention "notice"/"announcement"/
+                // "news". Not yet observed/captured on-device; the exact
+                // wording is a best effort pending a real capture (OQ-49).
+                matches = { text ->
+                    val t = text.lowercase()
+                    val isAnnouncement = t.contains("notice") || t.contains("announcement") || t.contains("news")
+                    val hasDismiss = listOf("close", "ok", "next", "got it").any { t.contains(it) }
+                    isAnnouncement && hasDismiss
+                },
+                action = MacroAction.TapAnyText(listOf("Close", "OK", "Got It", "Next"))
+            ),
             MacroStep(
                 name = "home: open Career",
                 // Home is identifiable by the CAREER button plus the bottom nav.
@@ -182,23 +300,38 @@ object AutoRunMacros {
                 matches = containsAll("continue career", "resume"),
                 action = MacroAction.TapText("Resume")
             ),
+            *dayBoundarySteps,
             MacroStep(
                 name = "career started (training hub reached)",
-                // Terminal state: the in-career hub. "turn(s) left" and the goal
-                // banner distinguish it from other screens that say "Training".
+                // Terminal state: the in-career hub. Observed on-device: a bare
+                // "training" + "turn" substring match false-positived on a loading
+                // *tip* screen ("Friendship Training becomes available after a
+                // Friendship Gauge turns orange. Now Loading...") — "turns orange"
+                // contains "turn" too. Require the specific "X turns left" counter
+                // phrase (not just the word "turn" anywhere) and explicitly exclude
+                // any loading screen, tip text included, rather than trusting a
+                // single word to mean "we arrived."
                 matches = { text ->
                     val t = text.lowercase()
-                    t.contains("training") && (t.contains("turn") || t.contains("goal"))
+                    val isLoadingScreen = t.contains("now loading") || t.contains("loading...")
+                    val hasTurnsLeftCounter = Regex("\\d+\\s*turns?\\s*left").containsMatchIn(t)
+                    !isLoadingScreen && t.contains("training") && (hasTurnsLeftCounter || t.contains("goal"))
                 },
                 action = MacroAction.Terminal
-            ),
-            MacroStep(
-                name = "generic no-choice advance",
-                // Kept last so specific screens win. Only fires on screens the
-                // corpus matcher has already classified as no-choice.
-                matches = containsAny("next", "ok", "confirm"),
-                action = MacroAction.TapText("Next")
             )
+            // No generic "tap Next/OK/Confirm wherever those words appear"
+            // fallback here (removed — see startCareerMissingCoverage note
+            // below and OQ-49). Observed on-device: on a fresh save (no
+            // Continue Career modal, i.e. the new-career path this macro does
+            // not license per REQ-A19's "does not license the new-career
+            // path" clause), the generic fallback blindly tapped Next/OK/
+            // Confirm through the trainee-select, legacy, and support-card
+            // screens it has no matcher for, overshooting real choice points
+            // and landing mid-way into an unrelated training-mode toggle.
+            // Better to exhaust retries and stop (UNRECOGNISED_SCREEN,
+            // falls through to the user) than to guess through unlicensed
+            // screens — REQ-A19 requires stopping at a decision point, not
+            // navigating through screens outside the resume path.
         )
     )
 
@@ -228,6 +361,18 @@ object AutoRunMacros {
     val finishCareer = MacroDefinition(
         name = FINISH_CAREER,
         steps = listOf(
+            // --- Branch A: still mid-run, exiting early via Menu > Give Up / Save & Exit. ---
+            MacroStep(
+                name = "Independent Training complete: proceed to Career",
+                // Grounded in a live capture (2026-08): "Independent Training" header,
+                // "TRAINING COMPLETE!" banner, Cancel/Career buttons. Checked before
+                // "open career menu" below since this screen also contains "training",
+                // though in practice the two don't overlap ("turn"/"goal" don't appear
+                // here — this modal shows "Time Left 0:00:00 left", not a turns-left
+                // counter).
+                matches = containsAny("training complete"),
+                action = MacroAction.TapText("Career")
+            ),
             MacroStep(
                 name = "open career menu",
                 matches = { text ->
@@ -246,6 +391,23 @@ object AutoRunMacros {
                 matches = containsAny("are you sure", "confirm"),
                 action = MacroAction.Decision("career.exit_confirm")
             ),
+            // --- Branch B: career already ran its course naturally. Grounded in a
+            // live capture (2026-08) of the full post-completion sequence: Independent
+            // Training complete (shared with Branch A above) -> Training Log (skipped
+            // entirely below, not stepped through) -> Complete Career hub -> Date
+            // Changed -> blank loading transition -> Login Bonus -> Notices -> Home. ---
+            MacroStep(
+                name = "Complete Career hub: confirm completion",
+                // The hub screen (Attributes/Skills, Fans, Stats) also has a "Training
+                // Log" button whose label would match a naive "training log" substring
+                // check — checked first and unconditionally preferred so the macro
+                // never wastes steps opening the multi-page log it doesn't need to
+                // read, and goes straight to the button that actually finishes this.
+                matches = containsAny("complete career"),
+                action = MacroAction.CompleteCareerCheckpoint
+            ),
+            *dayBoundarySteps,
+            // --- Shared terminal state for both branches. ---
             MacroStep(
                 name = "back at home",
                 matches = { text ->
