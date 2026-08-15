@@ -834,7 +834,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private fun executeResolvedVoiceAction(resolved: VoiceCorpus.Match) {
         when (resolved) {
             is VoiceCorpus.Match.Macro -> {
-                if (debounceVoice("macro:${resolved.command}")) return
+                // Key includes quick so "complete career" followed quickly by a
+                // corrected "complete career quickly" isn't silently swallowed
+                // as a duplicate of the same debounce key.
+                if (debounceVoice("macro:${resolved.command}:${resolved.quick}")) return
                 VoiceDebugLog.log("macro command detected: ${resolved.command}${if (resolved.quick) " (quickly)" else ""}")
                 executeMacroCommand(resolved.command, resolved.quick)
             }
@@ -1197,6 +1200,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 VoiceDebugLog.log("macro ${macro.name}: ABORTED mid-capture")
                 return@captureAndAnalyzeScreen
             }
+            // REQ-V20: keep the valid-commands/current-screen panel's "Screen
+            // (raw OCR)" line live while a macro runs, not just stale from
+            // whenever some other UI interaction last triggered a refresh —
+            // this is exactly the diagnostic surface for "why did nothing
+            // happen," most valuable on the UNRECOGNISED_SCREEN case below.
+            handler.post { refreshOverlay() }
             val step = macro.steps.firstOrNull { it.matches(text) }
             if (step == null) {
                 retryOrGiveUp(gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs, "UNRECOGNISED_SCREEN — no step matched")
@@ -1400,14 +1409,30 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // other text, while incidental word-in-a-sentence hits do.
         var box: Rect? = null
 
-        // Pass 1: exact line match.
-        exact@ for (block in visionText.textBlocks) {
+        // Pass 1: exact line match — when the SAME text appears as more than
+        // one exact line (observed live: the Complete Career hub shows
+        // "Complete Career" both as a small top-left breadcrumb-style label
+        // AND as the actual bottom pink button), prefer the largest bounding
+        // box rather than the first one in OCR reading order. A decorative
+        // label and a real button sharing identical text is exactly the kind
+        // of ambiguity the "training"-in-a-hint-sentence precedent above
+        // already established this function has to guard against — same
+        // failure class (tap dispatched, reports success, lands on the
+        // wrong thing), different cause (duplicate exact text, not a
+        // substring-in-prose hit), same principled fix: prefer the
+        // interpretation least likely to be incidental. A real button is
+        // visually larger than a small label in every case observed so far.
+        var bestArea = -1
+        for (block in visionText.textBlocks) {
             for (line in block.lines) {
                 if (line.text.trim().equals(text, ignoreCase = true) &&
                     !AutoRunMacros.isForbiddenTapTarget(line.text)
                 ) {
-                    box = line.boundingBox
-                    break@exact
+                    val area = line.boundingBox?.let { it.width() * it.height() } ?: 0
+                    if (area > bestArea) {
+                        bestArea = area
+                        box = line.boundingBox
+                    }
                 }
             }
         }

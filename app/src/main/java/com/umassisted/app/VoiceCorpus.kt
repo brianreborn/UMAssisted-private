@@ -111,14 +111,17 @@ object VoiceCorpus {
      * a facility/heartbeat/macro until their dispatch exists.
      */
     val specifiedNotWired: List<String> = listOf(
-        "training", "rest", "skills", "infirmary", "recreation", "date", "races",
+        "rest", "skills", "infirmary", "recreation", "date", "races",
         "back", "log", "menu",
         "skip on", "skip off", "press skip",
         "quick", "toggle quick", "enable quick", "disable quick",
         "turbo", "turbo mode", "enable turbo", "turbo on", "disable turbo", "turbo off",
-        "start listening", "stop listening", "mute", "voice off",
+        "start listening",
         "first option", "second option", "option one", "option 1",
         "gamble", "safe",
+        // "training" (REQ-V23 narrow case -> HubButton), "stop listening"/
+        // "mute"/"voice off" (REQ-V13 kill switch) are wired now — moved out
+        // of this not-yet-wired list, not removed from the corpus.
     )
 
     fun resolve(candidates: List<String>): Match = resolveDetailed(candidates).match
@@ -267,16 +270,31 @@ object VoiceCorpus {
         }
 
         val hits = mutableListOf<Pair<Match, List<String>>>()
-        if (macroHit != null) {
-            hits.add(Match.Macro(macroHit.first, macroHit.third) to listOf(macroHit.second))
-        }
-        // "resume" / "continue" are heartbeats, but also prefixes of
-        // "resume career" / "continue career". The longer macro wins;
-        // do not treat that as mixed-intent ambiguous.
-        if (heartbeatPhrase != null &&
-            (macroHit == null || !macroHit.second.contains(heartbeatPhrase))
-        ) {
-            hits.add(Match.Heartbeat(heartbeatPhrase) to listOf(heartbeatPhrase))
+        // "resume" / "continue" are heartbeats, but also prefixes of "resume
+        // career" / "continue career" — there the macro phrase is longer and
+        // wins. The reverse also happens: "continue sweep" is itself a whole
+        // heartbeat phrase (REQ-A24 continuation signal), but also contains
+        // the word "sweep," which REQ-A32 registered as its own bare macro
+        // phrase — there the HEARTBEAT phrase is longer and must win, or
+        // "continue sweep" wrongly resolves Ambiguous instead of the
+        // continuation signal it actually is. Whichever phrase is longer
+        // (more specific) wins in either direction; only a genuine overlap
+        // with neither containing the other is real mixed intent.
+        val heartbeatOverlapsMacro = macroHit != null && heartbeatPhrase != null &&
+            (macroHit.second.contains(heartbeatPhrase) || heartbeatPhrase.contains(macroHit.second))
+        if (heartbeatOverlapsMacro) {
+            if (heartbeatPhrase!!.length >= macroHit!!.second.length) {
+                hits.add(Match.Heartbeat(heartbeatPhrase) to listOf(heartbeatPhrase))
+            } else {
+                hits.add(Match.Macro(macroHit.first, macroHit.third) to listOf(macroHit.second))
+            }
+        } else {
+            if (macroHit != null) {
+                hits.add(Match.Macro(macroHit.first, macroHit.third) to listOf(macroHit.second))
+            }
+            if (heartbeatPhrase != null) {
+                hits.add(Match.Heartbeat(heartbeatPhrase) to listOf(heartbeatPhrase))
+            }
         }
         val confirmParts = confirmPartsIn(utterance)
         facDistinct.singleOrNull()?.let { index ->

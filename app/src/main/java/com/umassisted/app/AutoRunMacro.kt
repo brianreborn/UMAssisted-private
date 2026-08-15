@@ -217,9 +217,15 @@ object AutoRunMacros {
             name = "Login Bonus: tap through",
             // No stable button text ("tap anywhere to continue" per REQ-A19-
             // adjacent live testing) — center-screen tap, clear of the reward
-            // icon/carat display and the skip control in the corner.
+            // icon/carat display and the skip control in the corner. Fraction
+            // is relative to the game WINDOW (win.top/win.height() in
+            // macroTick's TapWindowFraction handling), not the full display —
+            // the live test this was grounded in used a raw full-screen tap
+            // (y=1000 of 2400), which naively divided out to 0.42; corrected
+            // here against the window's actual top offset (~132px status bar,
+            // confirmed via dumpsys) and height (~2268px): (1000-132)/2268.
             matches = containsAny("login bonus"),
-            action = MacroAction.TapWindowFraction(0.5f, 0.42f)
+            action = MacroAction.TapWindowFraction(0.5f, 0.38f)
         ),
         MacroStep(
             name = "Notices: dismiss",
