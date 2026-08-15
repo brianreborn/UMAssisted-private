@@ -45,4 +45,35 @@ object FacilityVocabulary {
 
     fun isHeartbeat(candidates: List<String>): Boolean =
         candidates.any { normalize(it) in heartbeatPhrases }
+
+    /** REQ-A19/A20/A21/A26: Named macro command resolution. */
+    fun matchMacroCommand(candidates: List<String>): MacroCommand? {
+        for (c in candidates) {
+            val norm = normalize(c)
+            if (norm == "start auto run" || norm == "start run" || norm == "auto run" || norm == "start career") {
+                return MacroCommand.START_AUTO_RUN
+            }
+            if (norm == "start auto run defaults" || norm == "start run defaults" || norm == "auto run defaults") {
+                return MacroCommand.START_AUTO_RUN_DEFAULTS
+            }
+            if (norm == "start auto run recording defaults" || norm == "record defaults") {
+                return MacroCommand.START_AUTO_RUN_RECORDING
+            }
+            if (norm == "finish auto run" || norm == "finish career" || norm == "complete auto run" || norm == "finish run" || norm == "stop auto run") {
+                return MacroCommand.FINISH_AUTO_RUN
+            }
+            if (norm == "super skip" || norm == "max skip" || norm == "full skip" || norm == "fast forward") {
+                return MacroCommand.SUPER_SKIP
+            }
+        }
+        return null
+    }
+}
+
+enum class MacroCommand {
+    START_AUTO_RUN,
+    START_AUTO_RUN_DEFAULTS,
+    START_AUTO_RUN_RECORDING,
+    FINISH_AUTO_RUN,
+    SUPER_SKIP
 }

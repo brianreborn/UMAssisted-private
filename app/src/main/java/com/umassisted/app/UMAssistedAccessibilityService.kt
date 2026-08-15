@@ -580,8 +580,10 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     private fun isUnambiguousVoiceMatch(candidates: List<String>): Boolean {
-        if (!voiceEnabled || !isInUma || !sweepEnabled) return false
-        return FacilityVocabulary.matchFacility(candidates) != null || FacilityVocabulary.isHeartbeat(candidates)
+        if (!voiceEnabled || !isInUma) return false
+        return FacilityVocabulary.matchFacility(candidates) != null ||
+            FacilityVocabulary.isHeartbeat(candidates) ||
+            FacilityVocabulary.matchMacroCommand(candidates) != null
     }
 
     /** Lets the settings UI apply a chime-mute toggle immediately to an already-armed session. */
@@ -598,8 +600,20 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private fun onVoiceUtterances(candidates: List<String>) {
         Log.i(TAG, "Voice recognized candidates: $candidates")
         VoiceDebugLog.log("utterances: $candidates")
-        if (!voiceEnabled || !isInUma || !sweepEnabled) {
-            VoiceDebugLog.log("ignored (voiceEnabled=$voiceEnabled isInUma=$isInUma sweepEnabled=$sweepEnabled)")
+        if (!voiceEnabled || !isInUma) {
+            VoiceDebugLog.log("ignored (voiceEnabled=$voiceEnabled isInUma=$isInUma)")
+            return
+        }
+
+        val macroCmd = FacilityVocabulary.matchMacroCommand(candidates)
+        if (macroCmd != null) {
+            VoiceDebugLog.log("macro command detected: $macroCmd")
+            executeMacroCommand(macroCmd)
+            return
+        }
+
+        if (!sweepEnabled) {
+            VoiceDebugLog.log("facility/heartbeat ignored (sweepEnabled=$sweepEnabled)")
             return
         }
 
@@ -727,6 +741,50 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             VoiceDebugLog.log("confirm window expired — resuming sweep")
             performTrainingSweepOnce(captureFirst = false)
         }
+    }
+
+    /** REQ-A19/A20/A21/A26: Macro command execution. */
+    private fun executeMacroCommand(cmd: MacroCommand) {
+        when (cmd) {
+            MacroCommand.START_AUTO_RUN -> executeMacro(AutoRunMacros.startCareer, MacroMode.STEP_ONLY)
+            MacroCommand.START_AUTO_RUN_DEFAULTS -> executeMacro(AutoRunMacros.startCareer, MacroMode.DEFAULTS)
+            MacroCommand.START_AUTO_RUN_RECORDING -> executeMacro(AutoRunMacros.startCareer, MacroMode.RECORDING_DEFAULTS)
+            MacroCommand.FINISH_AUTO_RUN -> executeMacro(AutoRunMacros.finishCareer, MacroMode.STEP_ONLY)
+            MacroCommand.SUPER_SKIP -> performSuperSkip()
+        }
+    }
+
+    /** REQ-A26: Super skip cycles Skip button to max speed level. */
+    private fun performSuperSkip() {
+        if (!isInUma) return
+        val myGen = ++actionGeneration
+        val win = gameWindowBounds() ?: return
+        val skipX = (win.left + win.width() * 0.88f)
+        val skipY = (win.top + win.height() * 0.90f)
+        Log.i(TAG, "Super skip: advancing Skip control to max speed at ($skipX, $skipY)")
+        VoiceDebugLog.log("super skip: advancing Skip control to max speed")
+
+        fun tapSkip(remainingTaps: Int) {
+            if (!isInUma || actionGeneration != myGen || remainingTaps <= 0) return
+            val path = Path().apply { moveTo(skipX, skipY) }
+            val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    if (remainingTaps > 1) {
+                        handler.postDelayed({ tapSkip(remainingTaps - 1) }, 400L)
+                    }
+                }
+            }, null)
+        }
+        tapSkip(2) // 2 taps cycles Off -> ▶ -> ▶▶
+    }
+
+    private fun executeMacro(macro: MacroDefinition, mode: MacroMode) {
+        if (!isInUma) return
+        val myGen = ++actionGeneration
+        Log.i(TAG, "Executing macro ${macro.name} in mode $mode")
+        VoiceDebugLog.log("macro start: ${macro.name} mode=$mode")
     }
 
     /**

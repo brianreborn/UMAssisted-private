@@ -279,4 +279,16 @@ object UserSettings {
     fun setRecordingDefaultsArmed(armed: Boolean) {
         prefs.edit().putBoolean("recording_defaults_armed", armed).apply()
     }
+
+    /** Stored decision defaults for REQ-A19/A21 macros. */
+    fun getStoredDefault(key: String): String? =
+        prefs.getString("default_$key", null)
+
+    fun setStoredDefault(key: String, value: String?) {
+        if (value == null) {
+            prefs.edit().remove("default_$key").apply()
+        } else {
+            prefs.edit().putString("default_$key", value).apply()
+        }
+    }
 }
