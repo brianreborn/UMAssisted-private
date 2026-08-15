@@ -566,7 +566,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         VoiceDebugLog.log(if (enabled) "=== VOICE ARMED ===" else "=== VOICE DISARMED ===")
         if (enabled) {
             val listener = voiceListener
-                ?: VoiceListener(this, ::onVoiceUtterances).also { voiceListener = it }
+                ?: VoiceListener(this, ::onVoiceUtterances, ::isUnambiguousVoiceMatch).also { voiceListener = it }
             listener.start()
         } else {
             voiceListener?.stop()
@@ -577,6 +577,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
             lastVoiceHeartbeatAtMs = 0L
         }
         refreshOverlay()
+    }
+
+    private fun isUnambiguousVoiceMatch(candidates: List<String>): Boolean {
+        if (!voiceEnabled || !isInUma || !sweepEnabled) return false
+        return FacilityVocabulary.matchFacility(candidates) != null || FacilityVocabulary.isHeartbeat(candidates)
     }
 
     /** Lets the settings UI apply a chime-mute toggle immediately to an already-armed session. */

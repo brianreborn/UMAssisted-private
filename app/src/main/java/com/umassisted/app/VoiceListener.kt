@@ -75,8 +75,8 @@ class VoiceListener(
 ) {
     companion object {
         private const val TAG = "VoiceListener"
-        private const val MIN_RESTART_DELAY_MS = 1200L
-        private const val HARD_ERROR_BACKOFF_MS = 2500L
+        private const val MIN_RESTART_DELAY_MS = 600L
+        private const val HARD_ERROR_BACKOFF_MS = 1500L
     }
 
     // Deliberately its OWN Handler, not the owning service's — voice's restart
@@ -108,11 +108,12 @@ class VoiceListener(
         }
 
         override fun onError(error: Int) {
+            // ERROR_NO_MATCH (7) and ERROR_SPEECH_TIMEOUT (6) are normal non-error outcomes
+            // in continuous listening when no speech is detected. They must not trigger
+            // a 2.5s hard-error blackout penalty.
             val hard = error == SpeechRecognizer.ERROR_AUDIO ||
                 error == SpeechRecognizer.ERROR_CLIENT ||
-                error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
-                error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
             Log.w(TAG, "Recognition error=$error hard=$hard")
             VoiceDebugLog.log("ERROR: code=$error hard=$hard")
             restartSoon(hardError = hard)
@@ -250,6 +251,9 @@ class VoiceListener(
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             // General free-form speech model for on-device recognition of single-word facility commands.
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            val tag = java.util.Locale.getDefault().toLanguageTag()
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, tag)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             // Needed to receive onPartialResults at all, so an unambiguous match can
@@ -265,14 +269,6 @@ class VoiceListener(
             val silenceTimeoutMs = UserSettings.getVoiceSilenceTimeoutMs().toInt()
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, silenceTimeoutMs)
-            val minSpeechMs = UserSettings.getVoiceMinSpeechLengthMs().toInt()
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minSpeechMs)
-        }
-
-        try {
-            r.cancel()
-        } catch (t: Throwable) {
-            Log.w(TAG, "Cancel prior session failed", t)
         }
 
         try {
