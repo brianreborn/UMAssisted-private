@@ -76,7 +76,13 @@ object CorpusMatcher {
             return MatchResult(false, false, "empty")
         }
 
-        val lower = ocrText.lowercase()
+        // normalizedForMatch, not plain .lowercase(): several rules below are
+        // multi-word ("save & exit", "give up", "go for it", ...) and ML
+        // Kit's OCR text joins separately-detected lines with `\n` — the
+        // same bug class confirmed live elsewhere in this app (see
+        // AutoRunMacro.normalizedForMatch's doc comment) applies here too,
+        // upstream of every macro/voice decision that consults this result.
+        val lower = AutoRunMacros.normalizedForMatch(ocrText)
 
         // Check negative signals first (has real choice)
         for ((pattern, isNoChoice) in rules) {

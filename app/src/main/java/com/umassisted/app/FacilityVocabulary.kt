@@ -26,10 +26,21 @@ object FacilityVocabulary {
         )
     )
 
-    private fun normalize(utterance: String): String =
+    // Compiled once, not per call — normalize() runs on every utterance.
+    private val NON_ALNUM = Regex("[^a-z0-9\\s]")
+    private val WHITESPACE_RUN = Regex("\\s+")
+
+    /**
+     * Shared with `VoiceCorpus` (which calls this directly rather than
+     * keeping its own copy) — these were previously two byte-identical
+     * private functions in separate files, one already proven to require
+     * lockstep edits (both gained the punctuation-strip/whitespace-collapse
+     * lines in the same session). One shared function removes that risk.
+     */
+    fun normalize(utterance: String): String =
         utterance.trim().lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
+            .replace(NON_ALNUM, " ")
+            .replace(WHITESPACE_RUN, " ")
             .trim()
 
     /**

@@ -222,7 +222,22 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** REQ-A21: capture what the user tapped at a paused macro Decision step. */
+    /**
+     * REQ-A21: capture what the user tapped at a paused macro Decision step.
+     *
+     * NON-FUNCTIONAL for this game, currently — confirmed, not suspected.
+     * `event.source`/`event.text` are AccessibilityNodeInfo-derived, and
+     * Umamusume exposes zero AccessibilityNodeInfo content (REQ-M11, single
+     * opaque Unity SurfaceView) — `text` below is unconditionally blank for
+     * every real in-game tap, so `recordDecision` is unreachable in practice.
+     * "Recording defaults" mode has never actually recorded an in-game
+     * decision. The real fix needs OQ-45/REQ-M8's touch-coordinate-to-OCR-
+     * bounding-box correlation (validated as a technique outside the app
+     * this session, not yet wired into the shipped service) to identify
+     * *what* was tapped without node text — not yet built. Logging loudly
+     * here instead of silently doing nothing, so this doesn't read as
+     * working when it isn't.
+     */
     private fun maybeRecordMacroDecisionFromTap(event: AccessibilityEvent) {
         val key = macroDecisionWaitKey ?: return
         val gen = macroDecisionWaitGen
@@ -230,7 +245,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (!canContinue(gen)) return
         val src = event.source
         val text = (src?.text?.toString() ?: event.text?.joinToString(" ") ?: "").trim()
-        if (text.isBlank() || AutoRunMacros.isForbiddenTapTarget(text)) return
+        if (text.isBlank()) {
+            Log.w(TAG, "macro $macroDecisionWaitMacroName: cannot record \"$key\" — no AccessibilityNodeInfo text available (REQ-M11/OQ-45, expected for this game)")
+            VoiceDebugLog.log("macro $macroDecisionWaitMacroName: NOT recorded — \"$key\" (recording-from-tap isn't functional for this game yet)")
+            return
+        }
+        if (AutoRunMacros.isForbiddenTapTarget(text)) return
         if (macroDecisionWaitRecords) {
             recordDecision("macro.decision.$key", text)
             Log.i(TAG, "macro $macroDecisionWaitMacroName: recorded default for \"$key\" = \"$text\" from user tap")
@@ -344,6 +364,17 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     @Volatile private var lastOcrVisionText: Text? = null
     @Volatile private var lastOcrCaptureWinBounds: Rect? = null
     @Volatile private var lastOcrScaleFactor: Float = 1f
+    // Monotonic per-capture-request counter (same pattern as actionGeneration
+    // elsewhere in this file): captureAndAnalyzeScreen can legitimately be
+    // called again before an earlier call's OCR finishes (macro tick, voice
+    // dispatch, and the debug "Read screen" cell can all trigger one), and
+    // ML Kit's per-image recognize() Task completion isn't ordering-
+    // guaranteed relative to other in-flight Tasks — a slower-but-earlier
+    // capture's result landing after a faster-but-later one would otherwise
+    // silently overwrite fresher cached OCR data with stale/foreign-screen
+    // data. Each request captures its own sequence number; only the result
+    // whose number still matches the latest issued gets applied.
+    @Volatile private var ocrRequestSeq: Int = 0
 
     // Very crude alpha "decision replay" store (REQ-A4 skeleton).
     // In a real alpha we would persist this. For now it's in-memory + optional SharedPrefs.
@@ -526,8 +557,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // screen point, so it must describe the window at the moment the pixels
         // being OCR'd were actually captured.
         val winBoundsAtRequest = gameWindowBounds()
+        val mySeq = ++ocrRequestSeq
 
-        val callback = buildScreenshotCallback(onResult, requestedAtMs, winBoundsAtRequest)
+        val callback = buildScreenshotCallback(onResult, requestedAtMs, winBoundsAtRequest, mySeq)
 
         // Capture the game's window rather than the whole composited display, so our
         // own overlay is structurally excluded — it sits in a separate window above
@@ -552,7 +584,8 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     private fun buildScreenshotCallback(
         onResult: ((recognizedText: String, isNoChoice: Boolean) -> Unit)?,
         requestedAtMs: Long,
-        winBoundsAtRequest: Rect?
+        winBoundsAtRequest: Rect?,
+        mySeq: Int
     ): TakeScreenshotCallback {
         return object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
@@ -613,16 +646,26 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     .addOnSuccessListener { visionText ->
                         val ocrDoneAtMs = android.os.SystemClock.elapsedRealtime()
                         val fullText = visionText.text
-                        lastOcrText = fullText
-                        lastOcrVisionText = visionText
-                        lastOcrCaptureWinBounds = winBoundsAtRequest
-                        lastOcrScaleFactor = appliedScale
-
+                        // Only the still-latest request updates the shared cache — a
+                        // slower-but-earlier capture completing after a newer one must
+                        // not overwrite fresher OCR data with stale/foreign-screen data.
+                        // onResult below still fires unconditionally: the caller who
+                        // issued *this* request gets *their* result regardless, this
+                        // guard is only about what the shared lastOcr*/cache fields hold
+                        // for everyone else reading them afterward.
                         val match = CorpusMatcher.match(fullText)
-                        lastWasNoChoice = match.isNoChoice
-                        lastMatchReason = match.reason
+                        if (mySeq == ocrRequestSeq) {
+                            lastOcrText = fullText
+                            lastOcrVisionText = visionText
+                            lastOcrCaptureWinBounds = winBoundsAtRequest
+                            lastOcrScaleFactor = appliedScale
+                            lastWasNoChoice = match.isNoChoice
+                            lastMatchReason = match.reason
+                        } else {
+                            Log.i(TAG, "OCR result for stale capture request (seq=$mySeq, latest=$ocrRequestSeq) — not cached")
+                        }
 
-                        Log.i(TAG, "=== OCR RESULT (noChoice=${lastWasNoChoice}, reason=${match.reason}) ===")
+                        Log.i(TAG, "=== OCR RESULT (noChoice=${match.isNoChoice}, reason=${match.reason}) ===")
                         if (BuildConfig.DEBUG) {
                             Log.i(TAG, fullText.take(1800))
                         }
@@ -637,7 +680,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         )
 
                         CorpusMatcher.logMatch(fullText)
-                        onResult?.invoke(fullText, lastWasNoChoice)
+                        onResult?.invoke(fullText, match.isNoChoice)
                     }
                     .addOnFailureListener { e ->
                         Log.e(TAG, "OCR failed", e)
@@ -1260,7 +1303,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                     }
                 }
                 is MacroAction.CompleteCareerCheckpoint -> {
-                    val skillPts = Regex("skill pts\\D*(\\d+)", RegexOption.IGNORE_CASE)
+                    // \s* between "skill" and "pts", not a literal space — an
+                    // OCR line split there ("Skill\nPts") would otherwise make
+                    // this never match, silently defaulting skillPts to 0 and
+                    // defeating the entire point of this checkpoint (REQ-A27).
+                    val skillPts = Regex("skill\\s*pts\\D*(\\d+)", RegexOption.IGNORE_CASE)
                         .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     if (skillPts > 0 && !currentMacroQuick) {
                         Log.i(TAG, "macro ${macro.name}: stopping at Complete Career — $skillPts unspent skill points")
@@ -1397,6 +1444,15 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         val visionText = lastOcrVisionText ?: return false
         val winBounds = lastOcrCaptureWinBounds ?: return false
         val scale = lastOcrScaleFactor
+        // normalizedForMatch on both sides, not raw .trim()/ignoreCase: a
+        // multi-word target ("Complete Career", "Got It") can OCR across two
+        // separate `Line`s within the same `Line`/`TextBlock`, joined by `\n`
+        // where the target has a plain space — confirmed live for "TRAINING
+        // COMPLETE!" at the MacroStep-matcher level, and this function is the
+        // second, previously-unfixed place the identical bug lives: a screen
+        // can be correctly identified via a normalized matcher and then fail
+        // to find its own tap target here because this comparison wasn't.
+        val needle = AutoRunMacros.normalizedForMatch(text)
 
         // Exact line match first (a button label is normally its own whole
         // line), THEN substring-in-line, THEN whole-block substring. Observed
@@ -1425,7 +1481,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         var bestArea = -1
         for (block in visionText.textBlocks) {
             for (line in block.lines) {
-                if (line.text.trim().equals(text, ignoreCase = true) &&
+                if (AutoRunMacros.normalizedForMatch(line.text) == needle &&
                     !AutoRunMacros.isForbiddenTapTarget(line.text)
                 ) {
                     val area = line.boundingBox?.let { it.width() * it.height() } ?: 0
@@ -1441,7 +1497,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (box == null) {
             substring@ for (block in visionText.textBlocks) {
                 for (line in block.lines) {
-                    if (line.text.contains(text, ignoreCase = true) &&
+                    if (AutoRunMacros.normalizedForMatch(line.text).contains(needle) &&
                         !AutoRunMacros.isForbiddenTapTarget(line.text)
                     ) {
                         box = line.boundingBox
@@ -1452,7 +1508,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         }
         if (box == null) {
             for (block in visionText.textBlocks) {
-                if (block.text.contains(text, ignoreCase = true) && !AutoRunMacros.isForbiddenTapTarget(block.text)) {
+                if (AutoRunMacros.normalizedForMatch(block.text).contains(needle) &&
+                    !AutoRunMacros.isForbiddenTapTarget(block.text)
+                ) {
                     box = block.boundingBox
                     break
                 }

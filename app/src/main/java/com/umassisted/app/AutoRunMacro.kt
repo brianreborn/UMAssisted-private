@@ -146,14 +146,44 @@ object AutoRunMacros {
     const val DECISION_TRAINEE = "career.trainee"
     const val DECISION_SUPPORT_DECK = "career.support_deck"
 
+    // Compiled once — normalizedForMatch is called per MacroStep per tick
+    // (up to ~15x on an UNRECOGNISED_SCREEN tick across both macros), no
+    // reason to recompile the same pattern every call.
+    private val WHITESPACE_RUN = Regex("\\s+")
+    private val TURNS_LEFT_PATTERN = Regex("\\d+\\s*turns?\\s*left")
+
+    /**
+     * Whitespace-normalized, lowercased: ML Kit's `Text.getText()` (the
+     * source of every `text` a MacroStep matcher sees, and of every
+     * `Line`/`TextBlock.text` `findAndTapText` and `CorpusMatcher` compare
+     * against) joins separate lines with `\n`, so a two-word phrase whose
+     * words OCR happened to land on different lines (confirmed live:
+     * "TRAINING" / "COMPLETE!" as two separate OCR lines for one visual
+     * banner) would never satisfy a plain `.contains("training complete")`
+     * check — the newline sits where the space should be. Collapsing all
+     * whitespace runs (spaces, newlines) to a single space before matching
+     * fixes every multi-word phrase check. Regex-based matchers elsewhere
+     * (e.g. `\d+\s*turns?\s*left`) already tolerate this via `\s`, which
+     * matches newlines by default — only plain-substring checks need this.
+     *
+     * Public and reused outside this file (`findAndTapText`,
+     * `CorpusMatcher`) rather than re-derived per call site — this class of
+     * bug was found independently in four different places in one review
+     * pass specifically because the original fix was local to this file's
+     * `containsAny`/`containsAll` only. One shared function, applied at
+     * every OCR-text comparison point, closes all of them at once.
+     */
+    fun normalizedForMatch(text: String): String =
+        text.lowercase().replace(WHITESPACE_RUN, " ")
+
     private fun containsAll(vararg needles: String): (String) -> Boolean = { text ->
-        val lower = text.lowercase()
-        needles.all { lower.contains(it.lowercase()) }
+        val norm = normalizedForMatch(text)
+        needles.all { norm.contains(it.lowercase()) }
     }
 
     private fun containsAny(vararg needles: String): (String) -> Boolean = { text ->
-        val lower = text.lowercase()
-        needles.any { lower.contains(it.lowercase()) }
+        val norm = normalizedForMatch(text)
+        needles.any { norm.contains(it.lowercase()) }
     }
 
     /**
@@ -170,7 +200,11 @@ object AutoRunMacros {
     )
 
     fun isForbiddenTapTarget(text: String): Boolean {
-        val t = text.trim().lowercase()
+        // normalizedForMatch, not plain .trim().lowercase(): "give up" is
+        // two words with no single-word NEVER_TAP fallback the way "delete
+        // data" has bare "delete" — an OCR line split ("Give"/"Up") must
+        // not silently defeat this destructive-action safety guard.
+        val t = normalizedForMatch(text)
         return NEVER_TAP.any { t == it || t.contains(it) }
     }
 
@@ -279,7 +313,10 @@ object AutoRunMacros {
                 // "news". Not yet observed/captured on-device; the exact
                 // wording is a best effort pending a real capture (OQ-49).
                 matches = { text ->
-                    val t = text.lowercase()
+                    // normalizedForMatch, not plain .lowercase(): "got it" is
+                    // two words, vulnerable to the same OCR-line-join bug
+                    // documented on normalizedForMatch itself.
+                    val t = normalizedForMatch(text)
                     val isAnnouncement = t.contains("notice") || t.contains("announcement") || t.contains("news")
                     val hasDismiss = listOf("close", "ok", "next", "got it").any { t.contains(it) }
                     isAnnouncement && hasDismiss
@@ -318,9 +355,17 @@ object AutoRunMacros {
                 // any loading screen, tip text included, rather than trusting a
                 // single word to mean "we arrived."
                 matches = { text ->
-                    val t = text.lowercase()
+                    // normalizedForMatch, not plain .lowercase(): "now loading"
+                    // is two words. Currently masked by step order (the
+                    // "loading screen" step above already catches a genuine
+                    // loading screen first via the newline-safe containsAny),
+                    // but this exclusion must hold on its own — the exact
+                    // false-positive this line exists to prevent (a loading
+                    // *tip* screen containing "training"+"goal") would
+                    // reappear the moment these steps are ever reordered.
+                    val t = normalizedForMatch(text)
                     val isLoadingScreen = t.contains("now loading") || t.contains("loading...")
-                    val hasTurnsLeftCounter = Regex("\\d+\\s*turns?\\s*left").containsMatchIn(t)
+                    val hasTurnsLeftCounter = TURNS_LEFT_PATTERN.containsMatchIn(t)
                     !isLoadingScreen && t.contains("training") && (hasTurnsLeftCounter || t.contains("goal"))
                 },
                 action = MacroAction.Terminal

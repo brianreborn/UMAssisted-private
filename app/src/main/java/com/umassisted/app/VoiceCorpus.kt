@@ -163,11 +163,11 @@ object VoiceCorpus {
     /** Same-utterance or follow-up confirm (REQ-V12). Not valid alone unless armed. */
     private val confirmPhrases = listOf("do it", "okay", "confirm", "ok", "yes", "go", "roger", "ryoukai", "hai")
 
-    private fun normalizeUtterance(utterance: String): String =
-        utterance.trim().lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+    // Was a byte-identical private copy of FacilityVocabulary.normalize —
+    // calling that directly instead removes the duplicate (and the risk of
+    // the two drifting apart, which already happened once in-session before
+    // being caught).
+    private fun normalizeUtterance(utterance: String): String = FacilityVocabulary.normalize(utterance)
 
     fun matchingCancelPhrase(utterance: String): String? {
         val norm = normalizeUtterance(utterance)
