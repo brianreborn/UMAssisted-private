@@ -399,20 +399,45 @@ object AutoRunMacros {
             ),
             // --- Branch B: career already ran its course naturally. Grounded in a
             // live capture (2026-08) of the full post-completion sequence: Independent
-            // Training complete (shared with Branch A above) -> Training Log (skipped
-            // entirely below, not stepped through) -> Complete Career hub -> Date
-            // Changed -> blank loading transition -> Login Bonus -> Notices -> Home. ---
+            // Training complete (shared with Branch A above) -> Training Log -> Complete
+            // Career hub -> Date Changed -> blank loading transition -> Login Bonus ->
+            // Notices -> Home.
+            //
+            // Day-boundary steps are checked BEFORE the hub/log steps below, not after
+            // — defensive ordering, not a confirmed failure. Every one of Date Changed/
+            // Login Bonus/Notices renders as a modal over a *blurred* Complete Career
+            // hub background in the live captures this branch is grounded in. If OCR
+            // ever reads "complete career" or "training log" text through that blur
+            // (unconfirmed either way — blur usually defeats ML Kit outright, but not
+            // guaranteed), the hub/log steps below would false-fire on top of a dialog
+            // instead of the dialog's own step firing. Checking the dialogs' own
+            // (unblurred, foreground) titles first avoids the failure mode entirely
+            // regardless of whether the blur theory is even right. ---
+            *dayBoundarySteps,
             MacroStep(
                 name = "Complete Career hub: confirm completion",
                 // The hub screen (Attributes/Skills, Fans, Stats) also has a "Training
-                // Log" button whose label would match a naive "training log" substring
-                // check — checked first and unconditionally preferred so the macro
-                // never wastes steps opening the multi-page log it doesn't need to
-                // read, and goes straight to the button that actually finishes this.
+                // Log" button whose label would match the dismiss step below's own
+                // "training log" text check — checked first and unconditionally
+                // preferred so the macro never wastes steps re-opening the log from
+                // the hub, and goes straight to the button that actually finishes this.
                 matches = containsAny("complete career"),
                 action = MacroAction.CompleteCareerCheckpoint
             ),
-            *dayBoundarySteps,
+            MacroStep(
+                name = "Training Log: dismiss",
+                // CORRECTED (was wrongly assumed "skipped entirely, never landed on"):
+                // tapping "Career" on the Independent Training complete modal lands on
+                // this multi-page log (Overview/Career/Aptitudes/Skill Hints/
+                // Inspiration) FIRST — it is a real intermediate screen, not bypassed.
+                // Live-captured: "OK" sits at a fixed position at the bottom regardless
+                // of which of the 5 pages is showing, so a single tap dismisses it from
+                // any page without needing to page through — checked after the hub step
+                // above since the hub's own "Training Log" button text would otherwise
+                // false-positive here too.
+                matches = containsAny("training log"),
+                action = MacroAction.TapText("OK")
+            ),
             // --- Shared terminal state for both branches. ---
             MacroStep(
                 name = "back at home",
