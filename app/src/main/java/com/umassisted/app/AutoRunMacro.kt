@@ -272,6 +272,21 @@ object AutoRunMacros {
     val startCareer = MacroDefinition(
         name = START_CAREER,
         steps = listOf(
+            // Checked first, ahead of every screen-specific step below — this
+            // file's own dayBoundarySteps doc comment says a day rollover "can
+            // interpose... between *any* macro's steps," not only right after
+            // Resume where these were originally spliced in. Generalizing that
+            // to "checked first" is the same defensive move already applied to
+            // finishCareer's hub/log steps (checked after dayBoundarySteps
+            // there for the same reason), just applied consistently across
+            // the whole step list rather than at one specific point. Verified
+            // against the screenshot corpus (dev-logs/SESSION_NOTES.md) that
+            // "Notices" is not part of the home/hub screens' own ambient
+            // chrome (no persistent "Notices" nav element documented there),
+            // so checking dayBoundarySteps' "notices" substring first isn't
+            // expected to false-fire on the ordinary home screen — flagged
+            // here in case a future capture proves otherwise.
+            *dayBoundarySteps,
             MacroStep(
                 name = "title splash: tap to start",
                 // The stylized "Umamusume Pretty Derby" logo art and the animated
@@ -324,6 +339,26 @@ object AutoRunMacros {
                 action = MacroAction.TapAnyText(listOf("Close", "OK", "Got It", "Next"))
             ),
             MacroStep(
+                name = "continue-career modal: resume",
+                // Checked before "home: open Career" below — this file's own
+                // header says "put specific screens before general ones," and
+                // this modal's two-substring match is strictly more specific
+                // than the home step's 3-of-5-nav-words heuristic. Ordering
+                // this way also guards against the same unconfirmed-blur risk
+                // flagged elsewhere in this file (finishCareer's hub/log
+                // steps): if the modal renders over a blurred home background
+                // and OCR reads enough of that background's nav chrome
+                // through it, the general home-step matcher could otherwise
+                // false-fire here and try to tap "CAREER" again instead of
+                // "Resume".
+                //
+                // "start auto run" is itself the declaration of intent to get into a
+                // run, so Resume is the step the command asked for rather than a
+                // decision to defer. Cancel and Delete Data are never targets.
+                matches = containsAll("continue career", "resume"),
+                action = MacroAction.TapText("Resume")
+            ),
+            MacroStep(
                 name = "home: open Career",
                 // Home is identifiable by the CAREER button plus the bottom nav.
                 // Requiring nav words too avoids matching any screen that merely
@@ -335,15 +370,6 @@ object AutoRunMacros {
                 },
                 action = MacroAction.TapText("CAREER")
             ),
-            MacroStep(
-                name = "continue-career modal: resume",
-                // "start auto run" is itself the declaration of intent to get into a
-                // run, so Resume is the step the command asked for rather than a
-                // decision to defer. Cancel and Delete Data are never targets.
-                matches = containsAll("continue career", "resume"),
-                action = MacroAction.TapText("Resume")
-            ),
-            *dayBoundarySteps,
             MacroStep(
                 name = "career started (training hub reached)",
                 // Terminal state: the in-career hub. Observed on-device: a bare
@@ -412,6 +438,19 @@ object AutoRunMacros {
     val finishCareer = MacroDefinition(
         name = FINISH_CAREER,
         steps = listOf(
+            // Checked first, ahead of both branches below — a day rollover can
+            // interpose at *any* point (this file's own dayBoundarySteps doc
+            // comment), not only right before the hub/log steps where the
+            // "checked before" defensive reasoning was first written. If
+            // "finish auto run" is issued mid-run right as a day boundary
+            // hits, a Login Bonus/Notices/Date Changed dialog could just as
+            // easily land over the still-mid-run training hub (which "open
+            // career menu" below would otherwise misread as the real hub
+            // screen) as over the Complete Career hub. Verified against the
+            // screenshot corpus that "Notices" isn't part of any hub's own
+            // ambient chrome, so this isn't expected to false-fire on an
+            // ordinary in-progress screen.
+            *dayBoundarySteps,
             // --- Branch A: still mid-run, exiting early via Menu > Give Up / Save & Exit. ---
             MacroStep(
                 name = "Independent Training complete: proceed to Career",
@@ -448,17 +487,15 @@ object AutoRunMacros {
             // Career hub -> Date Changed -> blank loading transition -> Login Bonus ->
             // Notices -> Home.
             //
-            // Day-boundary steps are checked BEFORE the hub/log steps below, not after
-            // — defensive ordering, not a confirmed failure. Every one of Date Changed/
-            // Login Bonus/Notices renders as a modal over a *blurred* Complete Career
-            // hub background in the live captures this branch is grounded in. If OCR
-            // ever reads "complete career" or "training log" text through that blur
-            // (unconfirmed either way — blur usually defeats ML Kit outright, but not
-            // guaranteed), the hub/log steps below would false-fire on top of a dialog
-            // instead of the dialog's own step firing. Checking the dialogs' own
-            // (unblurred, foreground) titles first avoids the failure mode entirely
-            // regardless of whether the blur theory is even right. ---
-            *dayBoundarySteps,
+            // (dayBoundarySteps now checked once, at the very top of this macro's
+            // step list, ahead of Branch A too — see the comment there. Every one
+            // of Date Changed/Login Bonus/Notices renders as a modal over a
+            // *blurred* Complete Career hub background in the live captures this
+            // branch is grounded in; if OCR ever reads "complete career" or
+            // "training log" text through that blur, the hub/log steps below
+            // would false-fire on top of a dialog instead of the dialog's own
+            // step firing, which checking day-boundary first avoids regardless
+            // of whether the blur theory is even right.) ---
             MacroStep(
                 name = "Complete Career hub: confirm completion",
                 // The hub screen (Attributes/Skills, Fans, Stats) also has a "Training
