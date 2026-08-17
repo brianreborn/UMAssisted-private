@@ -3,19 +3,21 @@ package com.umassisted.app
 import android.util.Log
 
 /**
- * Extremely simple alpha corpus matcher.
- *
- * In a real build this would:
- * - Load event text from a bundled master.mdb extract (REQ-M5)
- * - Load hand-labeled generic-UI entries with "no-choice" / "has-choice" flags (REQ-F4)
- * - Do fuzzy matching against OCR output.
- *
- * For now we have a tiny hand-seeded rule set derived from the public corpus
- * (screenshots/SESSION_NOTES.md) so we can demonstrate the flow.
+ * OQ-49 Stage 1 corpus matcher: real fuzzy matching + a confidence gate
+ * against a hand-seeded phrase set (REQ-M6's "never silently pick the
+ * closest of a bad set" rule). Stage 2 (REQ-M5/M7's real event/generic-UI
+ * corpus, the visual-match fallback, scrollbar geometry) is the remaining
+ * gap — this stage only replaces the matching *mechanism* (exact
+ * substring -> fuzzy, edit-distance-gated), not the data source.
  */
 object CorpusMatcher {
 
     private const val TAG = "CorpusMatcher"
+
+    // Below this normalized similarity, a candidate is not trusted — REQ-M6's
+    // confidence gate. Picked to tolerate a 1-2 character OCR misread on a
+    // short phrase (e.g. "ciose" -> "close") without accepting a wrong guess.
+    private const val CONFIDENCE_THRESHOLD = 0.80
 
     // Seeded from common patterns observed in the Aoharu Hai / Unity Cup corpus.
     // Each entry: (substring, isNoChoice)
@@ -68,8 +70,57 @@ object CorpusMatcher {
     data class MatchResult(
         val matched: Boolean,
         val isNoChoice: Boolean,
-        val reason: String
+        val reason: String,
+        val confidence: Double = 0.0
     )
+
+    /** Levenshtein edit distance between two strings. */
+    private fun editDistance(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        val prev = IntArray(b.length + 1) { it }
+        val curr = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            curr[0] = i
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                curr[j] = minOf(
+                    curr[j - 1] + 1,      // insertion
+                    prev[j] + 1,          // deletion
+                    prev[j - 1] + cost    // substitution
+                )
+            }
+            System.arraycopy(curr, 0, prev, 0, curr.size)
+        }
+        return prev[b.length]
+    }
+
+    /**
+     * Best-match similarity of [pattern] against any equal-length-ish window of
+     * [haystack], normalized to 0..1 (1 = exact). OCR text is a whole screen's
+     * worth of lines, not just the target phrase, so we slide a window sized to
+     * the pattern rather than diffing the entire haystack against it.
+     */
+    private fun fuzzyScore(haystack: String, pattern: String): Double {
+        if (pattern.isEmpty()) return 0.0
+        if (haystack.contains(pattern)) return 1.0
+        if (haystack.length < pattern.length) {
+            return 1.0 - editDistance(haystack, pattern).toDouble() / pattern.length
+        }
+        var best = Int.MAX_VALUE
+        // Allow the window to run a couple chars short/long of the pattern to
+        // absorb OCR insertions/drops without needing a fully general alignment.
+        val slack = 2
+        for (start in 0 until haystack.length) {
+            val end = minOf(start + pattern.length + slack, haystack.length)
+            val window = haystack.substring(start, end)
+            val dist = editDistance(window, pattern)
+            if (dist < best) best = dist
+        }
+        val similarity = 1.0 - best.toDouble() / pattern.length
+        return similarity.coerceIn(0.0, 1.0)
+    }
 
     fun match(ocrText: String): MatchResult {
         if (ocrText.isBlank()) {
@@ -84,22 +135,32 @@ object CorpusMatcher {
         // upstream of every macro/voice decision that consults this result.
         val lower = AutoRunMacros.normalizedForMatch(ocrText)
 
-        // Check negative signals first (has real choice)
+        // Score every rule, keep only candidates that clear the confidence
+        // gate — REQ-M6's "never silently pick the closest of a bad set"
+        // rule. Negative (has-choice) signals are still checked first and
+        // win ties, same conservative priority as the original stub.
+        var bestChoice: Pair<String, Double>? = null
+        var bestNoChoice: Pair<String, Double>? = null
         for ((pattern, isNoChoice) in rules) {
-            if (!isNoChoice && lower.contains(pattern)) {
-                return MatchResult(true, false, "choice signal: $pattern")
+            val score = fuzzyScore(lower, pattern)
+            if (score < CONFIDENCE_THRESHOLD) continue
+            if (isNoChoice) {
+                if (bestNoChoice == null || score > bestNoChoice!!.second) bestNoChoice = pattern to score
+            } else {
+                if (bestChoice == null || score > bestChoice!!.second) bestChoice = pattern to score
             }
         }
 
-        // Check positive no-choice signals
-        for ((pattern, isNoChoice) in rules) {
-            if (isNoChoice && lower.contains(pattern)) {
-                return MatchResult(true, true, "no-choice: $pattern")
-            }
+        bestChoice?.let { (pattern, score) ->
+            return MatchResult(true, false, "choice signal: $pattern (confidence=%.2f)".format(score), score)
+        }
+        bestNoChoice?.let { (pattern, score) ->
+            return MatchResult(true, true, "no-choice: $pattern (confidence=%.2f)".format(score), score)
         }
 
-        // Very conservative default for alpha: unknown → treat as has choice
-        return MatchResult(false, false, "no rule matched")
+        // Very conservative default for alpha: unknown or below confidence
+        // gate → treat as has choice, never silently pick the closest guess.
+        return MatchResult(false, false, "no rule matched above confidence gate ($CONFIDENCE_THRESHOLD)")
     }
 
     fun logMatch(ocrText: String) {
