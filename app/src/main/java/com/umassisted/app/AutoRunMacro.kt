@@ -413,9 +413,13 @@ object AutoRunMacros {
     )
 
     /**
-     * Screens REQ-A19's "Defaults" clause still needs before the new-career path can
-     * be implemented. Listed explicitly so the gap is visible rather than implied by
-     * absent code.
+     * Screens the new-career path needs before it can be implemented — pulled into
+     * scope for 1.0 beta (REQ-A19), no longer an open-ended exclusion. Blocked on
+     * (1) live captures of these four screens and (2) REQ-M13's navigation-graph
+     * refactor, since this path branches (trainee -> deck -> schedule) in a way the
+     * current flat MacroDefinition.steps list can't model — build it as a REQ-M13
+     * network once that lands, not as more flat-list steps. Listed explicitly so the
+     * gap is visible rather than implied by absent code.
      */
     val startCareerMissingCoverage = listOf(
         "new career: trainee selection",
