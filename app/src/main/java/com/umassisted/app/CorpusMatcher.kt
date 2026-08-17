@@ -14,11 +14,6 @@ object CorpusMatcher {
 
     private const val TAG = "CorpusMatcher"
 
-    // Below this normalized similarity, a candidate is not trusted — REQ-M6's
-    // confidence gate. Picked to tolerate a 1-2 character OCR misread on a
-    // short phrase (e.g. "ciose" -> "close") without accepting a wrong guess.
-    private const val CONFIDENCE_THRESHOLD = 0.80
-
     // Seeded from common patterns observed in the Aoharu Hai / Unity Cup corpus.
     // Each entry: (substring, isNoChoice)
     // Keep this small and conservative for alpha. New patterns should come from labeled corpus review.
@@ -74,6 +69,31 @@ object CorpusMatcher {
         val confidence: Double = 0.0
     )
 
+    /**
+     * How many edits a pattern of this length is allowed to tolerate and
+     * still count as a confident match.
+     *
+     * Deliberately requires an EXACT match (0 edits) below 6 characters,
+     * not just a lower ratio — found via code review plus this file's own
+     * unit tests: short/common English words sit only 1 edit from several
+     * rule patterns ("next"/"text", "close"/"chose", "goals"/"goal" are all
+     * single-substitution-or-insertion neighbors), so any fuzz tolerance on
+     * a <6-char pattern risks a false "no choice" verdict on a real choice
+     * screen whose unrelated on-screen text happens to contain the
+     * neighboring word — worse than missing an OCR misread on that word.
+     * 1-2 character OCR-typo tolerance only kicks in once the pattern is
+     * long enough that an accidental 1-edit collision with an unrelated
+     * real word becomes rare. This is a blunt, a-priori heuristic, not a
+     * calibrated one — REQ-M6/OQ-31 already flags that these thresholds
+     * need real empirical tuning; treat this as a safe starting default,
+     * not a finished answer.
+     */
+    private fun allowedEdits(patternLength: Int): Int = when {
+        patternLength < 6 -> 0
+        patternLength <= 9 -> 1
+        else -> 2
+    }
+
     /** Levenshtein edit distance between two strings. */
     private fun editDistance(a: String, b: String): Int {
         if (a == b) return 0
@@ -97,29 +117,63 @@ object CorpusMatcher {
     }
 
     /**
-     * Best-match similarity of [pattern] against any equal-length-ish window of
-     * [haystack], normalized to 0..1 (1 = exact). OCR text is a whole screen's
-     * worth of lines, not just the target phrase, so we slide a window sized to
-     * the pattern rather than diffing the entire haystack against it.
+     * Best edit distance of [pattern] against any *substring* of [haystack]
+     * ending anywhere, computed in one O(haystack.length * pattern.length)
+     * pass (the standard approximate-substring-match DP: zero-initialize the
+     * first row so the pattern is free to start matching at any haystack
+     * position, then take the minimum of the last row as the best
+     * end-of-match distance).
+     *
+     * Replaces an earlier fixed-width sliding-window version that computed a
+     * full edit distance from scratch at every haystack position — besides
+     * being O(haystack.length * pattern.length^2), that version's windows
+     * were always sized pattern.length+slack, so a match starting mid-window
+     * (i.e. anywhere except the last couple characters of the haystack) was
+     * forced to absorb trailing junk into the distance and would rarely
+     * clear the confidence gate at all. Found via code review, reproduced:
+     * the gate's own worked example ("ciose" -> "close") scored 0.80 in
+     * isolation but 0.40 once embedded in a realistic sentence.
+     */
+    private fun bestEditDistance(haystack: String, pattern: String): Int {
+        if (pattern.isEmpty()) return 0
+        if (haystack.isEmpty()) return pattern.length
+        val m = pattern.length
+        val prev = IntArray(m + 1) { it }
+        val curr = IntArray(m + 1)
+        var best = Int.MAX_VALUE
+        for (hc in haystack) {
+            curr[0] = 0 // pattern may start matching here for free
+            for (j in 1..m) {
+                val cost = if (hc == pattern[j - 1]) 0 else 1
+                curr[j] = minOf(
+                    curr[j - 1] + 1,      // insertion
+                    prev[j] + 1,          // deletion
+                    prev[j - 1] + cost    // substitution
+                )
+            }
+            // The answer is the minimum of the FULL-PATTERN column (curr[m])
+            // across all haystack positions, not the minimum of any one row —
+            // curr[0] is trivially 0 every row (an empty pattern prefix always
+            // "matches" for free), so scanning a whole row for its minimum
+            // picks that up and always returns 0. Track curr[m] as we go.
+            if (curr[m] < best) best = curr[m]
+            System.arraycopy(curr, 0, prev, 0, curr.size)
+        }
+        return best
+    }
+
+    /**
+     * Normalized similarity (0..1, 1 = exact) of [pattern] against the best
+     * matching substring of [haystack], and whether it clears the
+     * length-tiered [allowedEdits] gate. Returns similarity=1.0 immediately
+     * for a literal substring match without running the DP.
      */
     private fun fuzzyScore(haystack: String, pattern: String): Double {
         if (pattern.isEmpty()) return 0.0
         if (haystack.contains(pattern)) return 1.0
-        if (haystack.length < pattern.length) {
-            return 1.0 - editDistance(haystack, pattern).toDouble() / pattern.length
-        }
-        var best = Int.MAX_VALUE
-        // Allow the window to run a couple chars short/long of the pattern to
-        // absorb OCR insertions/drops without needing a fully general alignment.
-        val slack = 2
-        for (start in 0 until haystack.length) {
-            val end = minOf(start + pattern.length + slack, haystack.length)
-            val window = haystack.substring(start, end)
-            val dist = editDistance(window, pattern)
-            if (dist < best) best = dist
-        }
-        val similarity = 1.0 - best.toDouble() / pattern.length
-        return similarity.coerceIn(0.0, 1.0)
+        val dist = bestEditDistance(haystack, pattern)
+        if (dist > allowedEdits(pattern.length)) return 0.0
+        return (1.0 - dist.toDouble() / pattern.length).coerceIn(0.0, 1.0)
     }
 
     fun match(ocrText: String): MatchResult {
@@ -143,7 +197,7 @@ object CorpusMatcher {
         var bestNoChoice: Pair<String, Double>? = null
         for ((pattern, isNoChoice) in rules) {
             val score = fuzzyScore(lower, pattern)
-            if (score < CONFIDENCE_THRESHOLD) continue
+            if (score <= 0.0) continue
             if (isNoChoice) {
                 if (bestNoChoice == null || score > bestNoChoice!!.second) bestNoChoice = pattern to score
             } else {
@@ -160,11 +214,11 @@ object CorpusMatcher {
 
         // Very conservative default for alpha: unknown or below confidence
         // gate → treat as has choice, never silently pick the closest guess.
-        return MatchResult(false, false, "no rule matched above confidence gate ($CONFIDENCE_THRESHOLD)")
+        return MatchResult(false, false, "no rule matched above confidence gate")
     }
 
-    fun logMatch(ocrText: String) {
-        val res = match(ocrText)
-        Log.i(TAG, "match result: matched=${res.matched} noChoice=${res.isNoChoice} reason=${res.reason}")
+    /** Logs an already-computed [result] — call match() once per OCR text, not twice. */
+    fun logMatch(result: MatchResult) {
+        Log.i(TAG, "match result: matched=${result.matched} noChoice=${result.isNoChoice} reason=${result.reason}")
     }
 }

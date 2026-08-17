@@ -679,7 +679,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                                 "total=${ocrDoneAtMs - requestedAtMs}ms"
                         )
 
-                        CorpusMatcher.logMatch(fullText)
+                        CorpusMatcher.logMatch(match)
                         onResult?.invoke(fullText, match.isNoChoice)
                     }
                     .addOnFailureListener { e ->
