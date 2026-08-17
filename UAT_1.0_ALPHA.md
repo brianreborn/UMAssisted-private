@@ -223,19 +223,15 @@ verified each against code:
 | REQ-A21 (record-defaults one-shot macro) | **Built** |
 | REQ-SF7 (never tap the wrong app; re-verify immediately before each dispatch) | **Built**, with one partial gap: the doc's own text describes an explicit before/after screen-diff confirmation step, which doesn't exist as literal code — what exists instead is the macro retry loop re-capturing on the next tick, which serves a similar purpose indirectly but isn't the same guarantee |
 
-**OQ-1 — still open, worth knowing about even though it's not currently
-blocking work.** "Does Umamusume's client detect/block synthetic gestures
-dispatched by an AccessibilityService?" was never formally spiked — the
-sibling question about *reading* the accessibility tree was answered (no,
-the tree is empty), but the *dispatch-detection* question wasn't, because
-the obvious cheap test (script a tap and watch what happens) is itself the
-kind of autonomous input injection this project's own development rules
-(REQ-DEV1/2) forbid. This session did dispatch many real gestures
-successfully with visible, correct game responses and no visible warning or
-block from the client — informal, positive evidence, but it says nothing
-about whether anything was silently logged server-side. Not a blocker for
-functional testing; worth keeping in mind as a standing, unresolved
-account-safety question.
+**OQ-1 — RESOLVED: no.** "Does Umamusume's client detect/block synthetic
+gestures dispatched by an AccessibilityService?" No — not from a dedicated
+spike (the obvious cheap test, script a tap and watch what happens, is
+itself the kind of autonomous input injection REQ-DEV1/2 forbid), but from
+the volume of ordinary use: this session has dispatched many real gestures
+across full career auto-run macros with visible, correct game responses and
+no warning, throttling, or block from the client. This says nothing about
+whether anything is silently logged server-side — that residual risk isn't
+eliminated — but the client-side detect/block question itself is answered.
 
 No other open question in REQUIREMENTS.md is tagged as blocking specifically
 for 1.0 alpha — the rest (OQ-49's real screen classifier, OQ-50's tap-map
