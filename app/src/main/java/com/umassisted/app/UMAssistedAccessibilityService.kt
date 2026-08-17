@@ -171,6 +171,15 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     @Volatile private var voiceWarmedUp = false
     /** REQ-A27: whether the currently-running macro was invoked with "quickly". */
     @Volatile private var currentMacroQuick = false
+    /**
+     * REQ-SF7: "\${stepName}::\$text" of the last successfully-dispatched macro
+     * action, so the next tick can tell whether that dispatch actually changed
+     * anything. Instance field rather than a threaded macroTick parameter, same
+     * reasoning as currentMacroQuick above — only one macro runs at a time
+     * (generation-guarded), so this is safe and avoids widening every
+     * macroTick/retryOrGiveUp call site for state that's really per-run.
+     */
+    private var lastDispatchSignature: String? = null
     private var overlaySweepCell: TextView? = null
     private var overlayVoiceCell: TextView? = null
     private var overlayReadCell: TextView? = null
@@ -1196,6 +1205,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         // new parameter through every macroTick/retryOrGiveUp recursive call
         // site, safe because only one macro runs at a time (generation-guarded).
         currentMacroQuick = quick
+        lastDispatchSignature = null
         macroTick(myGen, macro, mode, android.os.SystemClock.elapsedRealtime(), 0, 0, 0L)
     }
 
@@ -1255,7 +1265,27 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 return@captureAndAnalyzeScreen
             }
             VoiceDebugLog.log("macro ${macro.name}: step \"${step.name}\" matched")
-            when (val action = step.action) {
+            val action = step.action
+            // REQ-SF7: confirm the effect of a dispatch, not just its safety
+            // before sending it. If this tick is about to dispatch the exact
+            // same action against the exact same screen text we already
+            // dispatched against last tick, the previous dispatch produced no
+            // visible change — treated the same as an unmatched screen (stop
+            // and fall through via the existing retry/give-up budget), not
+            // retried blindly forever.
+            val dispatchSignature = "${step.name}::$text"
+            val isDispatchAction = action is MacroAction.TapText ||
+                action is MacroAction.TapAnyText ||
+                action is MacroAction.TapWindowFraction ||
+                action is MacroAction.CompleteCareerCheckpoint
+            if (isDispatchAction && dispatchSignature == lastDispatchSignature) {
+                retryOrGiveUp(
+                    gen, macro, mode, startedAtMs, stepCount, retryCount, retryAnchorMs,
+                    "dispatched action for step \"${step.name}\" produced no visible screen change (REQ-SF7)"
+                )
+                return@captureAndAnalyzeScreen
+            }
+            when (action) {
                 is MacroAction.Terminal -> {
                     Log.i(TAG, "macro ${macro.name}: COMPLETED")
                     VoiceDebugLog.log("macro ${macro.name}: COMPLETED")
@@ -1272,6 +1302,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                 }
                 is MacroAction.TapText -> {
                     if (findAndTapText(gen, action.text, "macro:${step.name}")) {
+                        lastDispatchSignature = dispatchSignature
                         handler.postDelayed(
                             { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
                             MACRO_STEP_SETTLE_MS
@@ -1291,6 +1322,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         findAndTapText(gen, candidate, "macro:${step.name} ($candidate)")
                     }
                     if (found) {
+                        lastDispatchSignature = dispatchSignature
                         handler.postDelayed(
                             { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
                             MACRO_STEP_SETTLE_MS
@@ -1317,6 +1349,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         )
                         // Falls through to the user — REQ-A27, not a failure, no retry.
                     } else if (findAndTapText(gen, "Complete Career", "macro:${step.name}")) {
+                        lastDispatchSignature = dispatchSignature
                         handler.postDelayed(
                             { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
                             MACRO_STEP_SETTLE_MS
@@ -1348,6 +1381,7 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                         }
                     )
                     if (ok) {
+                        lastDispatchSignature = dispatchSignature
                         handler.postDelayed(
                             { macroTick(gen, macro, mode, startedAtMs, stepCount + 1, 0, 0L) },
                             MACRO_STEP_SETTLE_MS
