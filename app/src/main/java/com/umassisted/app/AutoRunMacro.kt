@@ -360,13 +360,22 @@ object AutoRunMacros {
             ),
             MacroStep(
                 name = "home: open Career",
-                // Home is identifiable by the CAREER button plus the bottom nav.
-                // Requiring nav words too avoids matching any screen that merely
-                // mentions "career" (the profile modal and results screens do).
+                // CORRECTED — live capture (2026-08-17) caught this step failing to
+                // match on the actual home screen: OCR read the full bottom nav
+                // (Enhance/Story/Home/Race/Scout, all 5) but the stylized "CAREER"
+                // button text itself was entirely absent from that capture's OCR
+                // output. Same font-rendering unreliability already documented for
+                // the title-splash logo (see that step's own comment) — a large,
+                // stylized button is exactly the kind of text ML Kit misses, while
+                // small chrome text (the bottom nav) reads reliably. Requiring
+                // "career" as a hard AND condition meant one missed OCR frame was
+                // enough to exhaust the whole retry budget and stop the macro with
+                // nothing dispatched. Nav-word count alone, raised from >=3 to >=4,
+                // is the reliable signal — the live capture had 5/5 — and no longer
+                // depends on the one button most likely to OCR inconsistently.
                 matches = { text ->
-                    val t = text.lowercase()
-                    t.contains("career") &&
-                        listOf("enhance", "story", "home", "race", "scout").count { t.contains(it) } >= 3
+                    val t = normalizedForMatch(text)
+                    listOf("enhance", "story", "home", "race", "scout").count { t.contains(it) } >= 4
                 },
                 action = MacroAction.TapText("CAREER")
             ),
