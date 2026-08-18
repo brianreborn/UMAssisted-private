@@ -239,3 +239,22 @@ No other open question in REQUIREMENTS.md is tagged as blocking specifically
 for 1.0 alpha — the rest (OQ-49's real screen classifier, OQ-50's tap-map
 calibration, OQ-22's full voice coverage, etc.) are explicitly beta-or-later
 scoped in the doc itself.
+
+## Soft blockers: "Alpha bar" carve-outs inside beta/final-scoped requirements
+
+Beyond the hard `Hard blocker for 1.0 alpha` tags above, REQUIREMENTS.md has
+five requirements that are themselves scoped to 1.0 beta/final overall but
+carry an explicit "**Alpha bar (1.0 alpha)**" sub-bullet — a narrower
+commitment alpha still has to meet even though the full requirement doesn't
+ship yet. Checked each against code:
+
+| Requirement | Alpha bar | Status |
+|---|---|---|
+| REQ-A10 (sweep overlay control) | Persistent overlay control, correct arm/disarm, self-exclusion under REQ-SF3 | **Built** — `sweepEnabled` + `overlaySweepCell` wired end to end |
+| REQ-A17 (overlay capture cost) | Window-scoped capture where the platform supports it, small resting footprint | **Built for the alpha target device.** `takeScreenshotOfWindow` (API 34+) structurally excludes the overlay from OCR; alpha targets a single Android 14+ device, so the pre-34 display-capture fallback (overlay text OCR'd, acknowledged gap) doesn't apply |
+| REQ-V9 (voice overlay control) | Persistent overlay control, correct arm/disarm, self-exclusion | **Built** — `voiceEnabled` + `overlayVoiceCell` wired end to end |
+| REQ-V20 (valid-commands panel) | Panel exists, collapses, lists the implemented corpus correctly gated by current state | **Built** — `computeValidCommandsSnapshot()` gates on `voiceEnabled`/`isInUma`/armed-facility state, not a flat dump |
+| REQ-SF3 (self-exclusion for own overlay) | Self-exclusion logic implemented and effective | **Built, confirmed empirically (OQ-47).** `isInUma` is driven by `rootInActiveWindow.packageName` alone; UMAssisted's `TYPE_ACCESSIBILITY_OVERLAY` window never becomes the active window, so it structurally can't flip `isInUma` false — no separate self-exclusion code was needed, and the shade-pulldown test confirmed the single signal is sufficient |
+
+All five hold. Combined with the hard-blocker table above, every requirement
+REQUIREMENTS.md explicitly ties to 1.0 alpha — hard or soft — is built.
