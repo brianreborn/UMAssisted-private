@@ -262,7 +262,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (AutoRunMacros.isForbiddenTapTarget(text)) return
         if (macroDecisionWaitRecords) {
             recordDecision("macro.decision.$key", text)
-            Log.i(TAG, "macro $macroDecisionWaitMacroName: recorded default for \"$key\" = \"$text\" from user tap")
+            // REQ-S3/S4: "recorded default = <content>" is exactly the recorded-
+            // decision-value content those requirements name — content-free line
+            // unconditional, the actual value only in debug (VoiceDebugLog already
+            // self-gates; Log.i here did not, and is fixed to match).
+            Log.i(TAG, "macro $macroDecisionWaitMacroName: recorded default for \"$key\" from user tap")
+            if (BuildConfig.DEBUG) Log.i(TAG, "macro $macroDecisionWaitMacroName: recorded default \"$key\" = \"$text\"")
             VoiceDebugLog.log("macro $macroDecisionWaitMacroName: recorded default \"$key\" = \"$text\"")
         }
     }
@@ -407,7 +412,11 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (signature.isBlank() || chosenText.isBlank()) return
         val key = signatureFor(signature).take(160)
         decisionHistory[key] = chosenText
-        Log.i(TAG, "Recorded decision: sig=${key.take(50)} -> $chosenText")
+        // REQ-S3/S4: sig is OCR-derived screen text, chosenText is the recorded
+        // decision value — both named categories. Content-free line unconditional;
+        // content only in debug.
+        Log.i(TAG, "Recorded decision")
+        if (BuildConfig.DEBUG) Log.i(TAG, "Recorded decision: sig=${key.take(50)} -> $chosenText")
         // Best-effort persist for alpha testing across restarts
         try {
             val prefs = getSharedPreferences("umassisted_decisions", MODE_PRIVATE)
@@ -443,12 +452,15 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (previous.equals("ADVANCE", ignoreCase = true) || previous.length > 80) {
             val token = extractActionToken(lastMatchReason)
             if (token != null) {
-                Log.i(TAG, "Promoting generic recorded decision using match token: $token")
+                // REQ-S3/S4: token/previous are recorded-decision content.
+                Log.i(TAG, "Promoting generic recorded decision using match token")
+                if (BuildConfig.DEBUG) Log.i(TAG, "Promoting generic recorded decision using match token: $token")
                 previous = token
             }
         }
 
-        Log.i(TAG, "Attempting to replay previous choice: $previous")
+        Log.i(TAG, "Attempting to replay previous choice")
+        if (BuildConfig.DEBUG) Log.i(TAG, "Attempting to replay previous choice: $previous")
 
         // REQ-M11: was an AccessibilityNodeInfo tree search — always found nothing,
         // since the game exposes no node content. findAndTapText (OCR bounding
@@ -787,7 +799,13 @@ class UMAssistedAccessibilityService : AccessibilityService() {
     }
 
     private fun onVoiceUtterances(candidates: List<String>): Boolean {
-        Log.i(TAG, "Voice recognized candidates: $candidates")
+        // REQ-S3/S4: raw recognized voice content — the exact category REQ-S3
+        // names first. Fires on every utterance, so this was the highest-volume
+        // unconditional leak found in the audit. Content-free line unconditional,
+        // content only in debug (VoiceListener's own STT logging already follows
+        // this pattern; this call site did not).
+        Log.i(TAG, "Voice utterance(s) recognized: count=${candidates.size}")
+        if (BuildConfig.DEBUG) Log.i(TAG, "Voice recognized candidates: $candidates")
         VoiceDebugLog.log("utterances: $candidates")
         val evidence = VoiceCorpus.resolveDetailed(candidates)
         val resolved = evidence.match
@@ -1402,7 +1420,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
                                 MACRO_STEP_SETTLE_MS
                             )
                         } else {
-                            Log.w(TAG, "macro ${macro.name}: stored default \"$stored\" not on screen for \"$key\"")
+                            // REQ-S3/S4: stored is recorded-decision content.
+                            Log.w(TAG, "macro ${macro.name}: stored default not on screen for \"$key\"")
+                            if (BuildConfig.DEBUG) Log.w(TAG, "macro ${macro.name}: stored default \"$stored\" not on screen for \"$key\"")
                             VoiceDebugLog.log("macro ${macro.name}: NEEDS_USER — stored default not on screen for \"$key\"")
                         }
                     } else {
@@ -1472,7 +1492,12 @@ class UMAssistedAccessibilityService : AccessibilityService() {
      */
     private fun findAndTapText(gen: Int, text: String, what: String): Boolean {
         if (AutoRunMacros.isForbiddenTapTarget(text)) {
-            Log.w(TAG, "Refusing macro tap on forbidden target: $text")
+            // REQ-S3/S4: text can be OCR-derived or a replayed stored decision
+            // value (Decision replay passes getLastDecision's result straight
+            // into findAndTapText), not always the fixed macro-step literal —
+            // content-free line unconditional, content only in debug.
+            Log.w(TAG, "Refusing macro tap on forbidden target")
+            if (BuildConfig.DEBUG) Log.w(TAG, "Refusing macro tap on forbidden target: $text")
             return false
         }
         val visionText = lastOcrVisionText ?: return false
@@ -1871,7 +1896,9 @@ class UMAssistedAccessibilityService : AccessibilityService() {
         if (sig.isNotBlank()) {
             val prior = getLastDecision(sig)
             if (!prior.isNullOrBlank()) {
-                Log.i(TAG, "No-choice advance: found recorded decision '$prior' for current sig; attempting replay")
+                // REQ-S3/S4: prior is recorded-decision content.
+                Log.i(TAG, "No-choice advance: found recorded decision for current sig; attempting replay")
+                if (BuildConfig.DEBUG) Log.i(TAG, "No-choice advance: found recorded decision '$prior' for current sig; attempting replay")
                 if (tryReplayLastDecision(lastOcrText)) {
                     return
                 }
