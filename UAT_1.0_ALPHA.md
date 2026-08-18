@@ -219,9 +219,9 @@ verified each against code:
 
 | Requirement | Status |
 |---|---|
-| REQ-A19 (start/resume macro, title-screen invocable) | **Built** — resume-path only, matching the doc's own scope restriction (new-career path is explicitly out of scope, not a gap) |
-| REQ-A21 (record-defaults one-shot macro) | **Built** |
-| REQ-SF7 (never tap the wrong app; re-verify immediately before each dispatch) | **Built**, with one partial gap: the doc's own text describes an explicit before/after screen-diff confirmation step, which doesn't exist as literal code — what exists instead is the macro retry loop re-capturing on the next tick, which serves a similar purpose indirectly but isn't the same guarantee |
+| REQ-A19 (start/resume macro, title-screen invocable) | **Built** — resume-path only, matching the doc's own scope restriction (new-career path pulled into beta scope, not alpha — see REQUIREMENTS.md) |
+| REQ-A21 (record-defaults one-shot macro) | **RE-LITIGATED, downgraded to a 1.0 beta blocker** — the recording mechanism (`maybeRecordMacroDecisionFromTap`) reads from `AccessibilityNodeInfo`, unconditionally empty for this game (REQ-M11); it has never actually recorded anything in-game, and the real fix (REQ-M8/OQ-45 touch-coordinate correlation) is genuinely unbuilt, not a gap in this macro's own code. "Start auto run, defaults" can still *replay* an existing default; nothing can *establish* one yet in alpha. |
+| REQ-SF7 (never tap the wrong app; re-verify immediately before each dispatch) | **Built, gap closed.** The before/after screen-diff confirmation the doc describes is now real code (`lastDispatchSignature` in `UMAssistedAccessibilityService.kt`): a dispatch that doesn't change the screen on the next tick routes through the existing retry/give-up budget instead of being silently re-tapped. |
 
 **OQ-1 — RESOLVED: no.** "Does Umamusume's client detect/block synthetic
 gestures dispatched by an AccessibilityService?" No — not from a dedicated
