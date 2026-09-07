@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "source": "brianreborn/UMAssisted-private/docs/desktop-agent/hosts.json",
+  "workdir": {
+    "layout": "{home}/swarm-agents/{project}/{hostname}/{role}",
+    "clones": { "official": "official", "dev": "dev" },
+    "home": { "windows": "USERPROFILE", "unix": "HOME" }
+  },
+  "leases": [
+    {
+      "id": "qodesh-grok-build",
+      "role": "swarm-bench",
+      "os": "windows",
+      "brain": "grok-build",
+      "device": "adb-optional",
+      "match": { "hostname": ["QODESH"] },
+      "notes": "This Grok. Sibling workspace Documents/UMAssisted-workspace. Junctions under swarm-agents/umassisted/qodesh/swarm-bench.",
+      "never": ["gradle.assemble-release", "secret.keystore-release", "adb.inject-into-live-game"]
+    },
+    {
+      "id": "github-actions",
+      "role": "watchdog",
+      "os": "linux",
+      "brain": "github-actions",
+      "device": null,
+      "match": { "os": "linux" },
+      "notes": "GitHub-hosted CI only (assembleDebug + unit tests / requirements-map). Not a laptop pool.",
+      "never": ["adb.*", "secret.keystore-release"]
+    }
+  ]
+}

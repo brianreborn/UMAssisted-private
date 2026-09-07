@@ -1,0 +1,29 @@
+{
+  "project": "umassisted",
+  "brain": "grok-build",
+  "trustedActor": "brianreborn",
+  "officialRepo": "brianreborn/UMAssisted",
+  "devRepo": "brianreborn/UMAssisted-private",
+  "defaultBranch": "master",
+  "applicationId": "com.umassisted.app",
+  "workspace": {
+    "windows": "{USERPROFILE}/Documents/UMAssisted-workspace",
+    "official": "UMAssisted",
+    "dev": "UMAssisted-private"
+  },
+  "hosts": {
+    "swarm-bench": ["qodesh-grok-build"],
+    "watchdog": ["github-actions"],
+    "note": "Brain is Grok Build on QODESH. SHALOM japanglify Swarm Bench and the Grok Bot Green-Roomz fleet are out of scope."
+  },
+  "trees": {
+    "official": ["requirements", "pages", "screenshots", "map-generator"],
+    "dev": ["product-source", "gradle-assemble", "unit-tests", "inner-loop-adb"]
+  },
+  "never": [
+    "publish-app-source",
+    "adb.inject-into-live-game",
+    "gradle.assemble-release-unsigned-publish",
+    "recreate-grokbot-green-roomz-fleet"
+  ]
+}
